@@ -62,14 +62,22 @@ allowed_paths = ["/Users/patrick", "/tmp"]      # required, empty list = read-on
 log_path = "/Users/patrick/.hermes-nodes/audit.log"   # default
 
 [server]
-# Optional: pin the server's TLS cert (recommended for self-hosted deployments)
-# ca_cert = "/path/to/ca.pem"
+# TLS verification: by default the node uses the OS CA bundle, so
+# Let's Encrypt and other public CAs just work. You only need to set
+# one of the options below for self-signed certs or extra hardening.
+#
+# Option 1: trust a custom CA (homelab, internal CA, self-signed dev cert)
+# ca_cert = "/Users/patrick/.hermes-nodes/my-ca.pem"
+#
+# Option 2: full cert pinning — node refuses to connect if the cert changes
+# pinned_cert_sha256 = "a1b2c3d4..."
 ```
 
 **Security notes:**
 - The token is stored in plaintext in this file. File mode is `0600`.
 - `allowed_paths` is enforced **on the laptop**. The server cannot bypass it.
 - If `allowed_paths` is empty, all filesystem operations are denied (exec still works).
+- **Default TLS trust** uses the OS CA bundle. If your server uses a public CA (e.g. Let's Encrypt), no extra config needed.
 
 ## What the node can do (v1)
 
