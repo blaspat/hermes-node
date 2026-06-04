@@ -37,13 +37,13 @@ hermes node pair --name work-laptop
 # prints: Pairing token for "work-laptop":
 #         abcdef1234567890...
 #         Run on the laptop:
-#           hermes-node pair --server wss://vps.yourdomain.com:8443 --token abcdef1234567890...
+#           hermes-node pair --server wss://vps.yourdomain.com:6969 --token abcdef1234567890...
 ```
 
 Then on the laptop:
 
 ```bash
-hermes-node pair --server wss://vps.yourdomain.com:8443 --token abcdef1234567890...
+hermes-node pair --server wss://vps.yourdomain.com:6969 --token abcdef1234567890...
 # writes ~/.hermes-nodes/config.toml
 # connects, authenticates, and goes idle in the background
 ```
@@ -56,7 +56,7 @@ That's the whole flow. Kate (or any Hermes brain) can now run shell commands and
 
 ```toml
 [node]
-server_url = "wss://vps.yourdomain.com:8443"   # required
+server_url = "wss://vps.yourdomain.com:6969"   # required
 name = "work-laptop"                            # required, must match server token
 allowed_paths = ["/Users/patrick", "/tmp"]      # required, empty list = read-only filesystem
 log_path = "/Users/patrick/.hermes-nodes/audit.log"   # default

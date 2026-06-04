@@ -21,7 +21,7 @@ Configuration lives at `~/.hermes-nodes/config.toml`. Logs at `~/.hermes-nodes/a
 
 ## What it does
 
-- Opens an **outbound** WebSocket to a server URL you specify (default port 8443)
+- Opens an **outbound** WebSocket to a server URL you specify (default port 6969)
 - Authenticates with a pre-shared token
 - On request from the server: runs shell commands, reads files, writes files
 - Writes an audit log entry for every call
