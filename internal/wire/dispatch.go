@@ -54,10 +54,24 @@ type Dispatcher struct {
 	// Optional; nil = no-op.
 	OnError func(err error, env Envelope)
 
+	// OnRead is invoked after every successful read, before
+	// the envelope is processed. The Task 1.9 heartbeat uses
+	// this to bump the Pinger's liveness clock on every
+	// received frame (PROTOCOL.md §6: "no pong (or any other
+	// message) is received within 60s" means a connection is
+	// dead — so every frame resets the watchdog, not just
+	// pong). Optional; nil = no-op.
+	OnRead func()
+
 	// ReadTimeout bounds a single read inside the loop. The
-	// PROTOCOL.md \u00a76 heartbeat spec says a connection is dead
-	// after 60s of silence, so 30s is a comfortable margin that
-	// also keeps the loop responsive to ctx cancellation.
+	// PROTOCOL.md §6 heartbeat spec says a connection is dead
+	// after 60s of silence. The heartbeat watchdog runs at
+	// that same threshold, so the dispatcher's read deadline
+	// is set to PongTimeout + 30s (default 90s) so the
+	// watchdog wins the race — the dispatcher never times
+	// out a still-healthy connection, but a truly dead
+	// connection (no bytes at all) trips the watchdog first
+	// and the dispatcher's deadline is just a backstop.
 	ReadTimeout time.Duration
 
 	// WriteTimeout bounds a single response write. Smaller than
@@ -69,11 +83,17 @@ type Dispatcher struct {
 // NewDispatcher wraps a post-handshake Client. The dispatch loop does
 // not own the connection's lifecycle: the caller is still responsible
 // for closing the Client (and thus the conn) when Run returns.
+//
+// ReadTimeout is set to DefaultPongTimeout + 30s (90s) so the Task
+// 1.9 heartbeat watchdog — which trips at 60s of silence per
+// PROTOCOL.md §6 — wins the race for a healthy-but-silent
+// connection. The dispatcher's read deadline is a backstop for the
+// truly-no-bytes-at-all case, not the primary liveness check.
 func NewDispatcher(c *Client) *Dispatcher {
 	return &Dispatcher{
 		conn:         c.Conn(),
 		handlers:     make(map[MessageType]Handler),
-		ReadTimeout:  30 * time.Second,
+		ReadTimeout:  DefaultPongTimeout + 30*time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 }
@@ -163,7 +183,10 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 }
 
 // readOne pulls one envelope off the connection with the configured
-// read timeout, then decodes it via the shared codec.
+// read timeout, then decodes it via the shared codec. After a
+// successful read, OnRead (if set) is invoked so the heartbeat
+// liveness clock can be bumped — PROTOCOL.md §6 says any received
+// message counts as liveness, not just pong.
 func (d *Dispatcher) readOne(ctx context.Context) (Envelope, error) {
 	if err := d.conn.SetReadDeadline(deadlineFromCtx(ctx, d.ReadTimeout)); err != nil {
 		return Envelope{}, fmt.Errorf("wire: set read deadline: %w", err)
@@ -172,6 +195,9 @@ func (d *Dispatcher) readOne(ctx context.Context) (Envelope, error) {
 	if err != nil {
 		return Envelope{}, fmt.Errorf("wire: read: %w", err)
 	}
+	if d.OnRead != nil {
+		d.OnRead()
+	}
 	var env Envelope
 	if err := decodeEnvelope(raw, &env); err != nil {
 		return Envelope{}, fmt.Errorf("wire: decode envelope: %w", err)
@@ -179,8 +205,8 @@ func (d *Dispatcher) readOne(ctx context.Context) (Envelope, error) {
 	return env, nil
 }
 
-// writeOne sends one envelope with the configured write timeout. The
-// envelope's MarshalJSON flattens its typed payload into the
+// writeOne sends one envelope with the configured write deadline.
+// The envelope's MarshalJSON flattens its typed payload into the
 // top-level wire shape (see messages.go).
 func (d *Dispatcher) writeOne(ctx context.Context, env Envelope) error {
 	if err := d.conn.SetWriteDeadline(deadlineFromCtx(ctx, d.WriteTimeout)); err != nil {
@@ -190,6 +216,24 @@ func (d *Dispatcher) writeOne(ctx context.Context, env Envelope) error {
 		return fmt.Errorf("wire: write: %w", err)
 	}
 	return nil
+}
+
+// WriteEnvelope sends one envelope on the connection from outside
+// the dispatch loop. It exists for the Task 1.9 pinger, which runs
+// in a separate goroutine and needs to write `ping` frames
+// without going through the dispatcher.
+//
+// WriteEnvelope is goroutine-safe with itself and with the
+// dispatcher's Run loop only because gorilla/websocket's Conn
+// serialises writes internally. The dispatcher never writes
+// asynchronously (every write is inside the Run loop), so the
+// only concurrent writer is the pinger. That keeps the invariant
+// "at most one in-flight write at any time" intact.
+//
+// Callers that want to write from multiple goroutines must
+// serialize themselves; this method does not.
+func (d *Dispatcher) WriteEnvelope(ctx context.Context, env Envelope) error {
+	return d.writeOne(ctx, env)
 }
 
 // handleReserved handles the four message types the dispatcher owns
