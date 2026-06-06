@@ -142,10 +142,25 @@ func runDispatcherNoCleanup(t *testing.T, d *Dispatcher) (context.CancelFunc, <-
 }
 
 // readServerJSON reads one JSON message from the server side of
-// the pair and decodes it into a map. Test helper only.
+// the pair and decodes it into a map. Test helper only. Uses a
+// short 2s read deadline; for tests that intentionally move more
+// than 2s of payload (e.g. TestWriteHandler_FileTooLarge's 10MB
+// write), use readServerJSONWithDeadline directly.
 func readServerJSON(t *testing.T, conn *websocket.Conn) map[string]any {
 	t.Helper()
-	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+	return readServerJSONWithDeadline(t, conn, 2*time.Second)
+}
+
+// readServerJSONWithDeadline is the deadline-aware variant of
+// readServerJSON. The default 2s server read deadline in
+// readEnvelope/ReadMessage is right for handler tests, but the
+// 10MB cap test streams ~13.3MB through the test websocket and
+// needs a longer window. Production code is unaffected — the
+// production dispatcher has its own ReadTimeout/WriteTimeout
+// and the test rig is not a model of the production path.
+func readServerJSONWithDeadline(t *testing.T, conn *websocket.Conn, timeout time.Duration) map[string]any {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		t.Fatalf("set server read deadline: %v", err)
 	}
 	_, raw, err := conn.ReadMessage()
