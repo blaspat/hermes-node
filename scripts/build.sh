@@ -39,13 +39,6 @@ TARGETS=(
   "windows/arm64"
 )
 
-# Strip the Windows .exe when verifying arches with `file` later (it's the same
-# arch; the suffix is just convention so Windows can launch it).
-EXT=""
-if [[ "${TARGETS[0]%%/*}" == "windows" ]]; then
-  EXT=".exe"
-fi
-
 echo "==> cleaning $DIST"
 rm -rf "$DIST"
 mkdir -p "$DIST"
