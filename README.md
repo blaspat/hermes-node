@@ -22,7 +22,7 @@ irm https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.
 
 Both installers:
 - Download the latest release binary for your OS/arch
-- Drop it in `~/.local/bin/hermes-node` (or `%LOCALAPPDATA%\hermes-nodes\` on Windows)
+- Drop it in `~/.local/bin/hermes-node` (or `%LOCALAPPDATA%\Programs\hermes-node\` on Windows, and added to the user PATH)
 - Set up a user-level background service (launchd / systemd --user / Task Scheduler) so the node auto-starts on boot
 - Print next-step instructions for pairing with your Hermes brain
 
