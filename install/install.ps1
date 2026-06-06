@@ -85,7 +85,11 @@ function Show-Help {
   exit 0
 }
 
-if ($args -contains '-h' -or $args -contains '--help' -or $PSBoundParameters.ContainsKey('Help')) {
+# Help is intentionally not exposed as a declared [switch] parameter (the
+# intent is to keep the help text in the script header and not duplicate
+# it in a Parameter() block). The -h/--help checks via $args cover the
+# only two forms we want to accept.
+if ($args -contains '-h' -or $args -contains '--help') {
   Show-Help
 }
 

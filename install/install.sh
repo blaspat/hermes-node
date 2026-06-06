@@ -139,21 +139,34 @@ esac
 # Exposed as a subshell-readable function so install_layout_test.sh can call
 # it under controlled env (it sets BIN_DIR / CONFIG_DIR / HOME).
 print_layout() {
-  cat <<EOF
-{
-  "os": "$OS",
-  "arch": "$ARCH",
-  "asset": "$ASSET_NAME",
-  "binary": "$BIN_PATH",
-  "config_dir": "$CONFIG_DIR",
-  "service": {
-    "kind": "$SERVICE_KIND",
-    "file": "$SERVICE_FILE"
-  },
-  "version_requested": "${VERSION:-latest}",
-  "dry_run": $DRY_RUN
-}
-EOF
+  # Build the JSON via jq -n --arg so that any value containing quotes,
+  # backslashes, or control characters is escaped correctly. The values are
+  # env-controlled (HERMES_NODE_BIN_DIR, HERMES_NODE_VERSION, etc.), not
+  # user-arbitrary, but a hardened path is the right default for an
+  # installer that prints machine-readable output.
+  jq -n \
+    --arg os "$OS" \
+    --arg arch "$ARCH" \
+    --arg asset "$ASSET_NAME" \
+    --arg binary "$BIN_PATH" \
+    --arg config_dir "$CONFIG_DIR" \
+    --arg service_kind "$SERVICE_KIND" \
+    --arg service_file "$SERVICE_FILE" \
+    --arg version_requested "${VERSION:-latest}" \
+    --argjson dry_run "$DRY_RUN" \
+    '{
+      os: $os,
+      arch: $arch,
+      asset: $asset,
+      binary: $binary,
+      config_dir: $config_dir,
+      service: {
+        kind: $service_kind,
+        file: $service_file
+      },
+      version_requested: $version_requested,
+      dry_run: $dry_run
+    }'
 }
 
 if [ "$PRINT_LAYOUT" = 1 ]; then
