@@ -232,6 +232,19 @@ func (d *Dispatcher) writeOne(ctx context.Context, env Envelope) error {
 //
 // Callers that want to write from multiple goroutines must
 // serialize themselves; this method does not.
+//
+// FIXME(9.x-async-writes): this single-in-flight invariant is
+// load-bearing for three layers (gorilla's write lock, the
+// dispatch loop's Run, and the pinger's onPing closure). The
+// moment a future task adds a second async writer — e.g. a
+// long-running handler that streams results back while the
+// dispatch loop is still servicing the next request, or an
+// unsolicited `event` push from a background goroutine (PROTOCOL.md
+// §10 lists events as a future direction) — gorilla's lock is no
+// longer enough and the onPing closure here can interleave with
+// a write that started after it. When that lands, the dispatch
+// loop needs an explicit write-serialisation mutex and every
+// caller of WriteEnvelope needs to be revisited.
 func (d *Dispatcher) WriteEnvelope(ctx context.Context, env Envelope) error {
 	return d.writeOne(ctx, env)
 }
