@@ -17,7 +17,6 @@ package wire
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -596,13 +595,10 @@ func TestWriteHandler_FileTooLarge(t *testing.T) {
 
 	// 10MB + 1 byte, base64-encoded. The wire-side write of
 	// ~13.3MB through the test websocket takes longer than the
-	// default 2s server read deadline in readEnvelope. Inline a
-	// long-deadline read here rather than going through
-	// readEnvelope so the test rig's 2s timeout doesn't race
-	// the in-flight wire write. (Production code is unaffected;
-	// the production dispatcher has its own ReadTimeout/
-	// WriteTimeout and the test rig is not a model of the
-	// production path.)
+	// default 2s server read deadline in readEnvelope, so we
+	// use the deadline-aware variant with a 30s window. The
+	// production dispatcher has its own ReadTimeout/WriteTimeout
+	// and the test rig is not a model of the production path.
 	big := make([]byte, MaxFileBytes+1)
 	writeServerJSON(t, pair.server, map[string]any{
 		"id":          "req-write-big",
@@ -610,17 +606,7 @@ func TestWriteHandler_FileTooLarge(t *testing.T) {
 		"path":        target,
 		"content_b64": base64.StdEncoding.EncodeToString(big),
 	})
-	if err := pair.server.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		t.Fatalf("set server read deadline: %v", err)
-	}
-	_, raw, err := pair.server.ReadMessage()
-	if err != nil {
-		t.Fatalf("server read: %v", err)
-	}
-	var resp map[string]any
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		t.Fatalf("server decode: %v (raw=%s)", err, string(raw))
-	}
+	resp := readServerJSONWithDeadline(t, pair.server, 30*time.Second)
 
 	if resp["status"] != "error" {
 		t.Errorf("response status: got %q, want error", resp["status"])
