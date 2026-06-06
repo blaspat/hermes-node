@@ -260,10 +260,15 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	// implementation details.
 	d := NewDispatcher(c)
 	if err := s.opts.Setup(ctx, c, d, pinger); err != nil {
-		// Setup failure: fatal-ish, but we still want to
-		// retry once on the assumption that the failure
-		// was transient (e.g. handler constructor hit a
-		// filesystem blip). After 3 attempts we give up.
+		// Setup failure: surfaced as a recoverable error so
+		// the supervisor's outer Run loop retries it on the
+		// next backoff tick. We do NOT cap the attempt count
+		// here — a misconfigured handler (e.g. a filesystem
+		// blip on a slow mount) deserves a chance to recover
+		// across reconnects. The same applies to dial errors.
+		// The only "give up" condition is context
+		// cancellation (caller asked us to stop), which the
+		// Run loop handles via errFatal.
 		return fmt.Errorf("wire: setup (attempt %d): %w", s.attempt, err)
 	}
 
@@ -296,7 +301,21 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		// write lock). The dispatch loop's own
 		// read will return the same error shortly
 		// and trigger the reconnect.
-		if err := d.WriteEnvelope(ctx, env); err != nil {
+		//
+		// Use pingCtx, NOT the outer ctx: this
+		// closure is owned by the pinger, so the
+		// write should die with the pinger, not
+		// outlive it. Today the two contexts share
+		// the same lifecycle (outer cancellation
+		// cancels pingCtx via the defer above), so
+		// the difference is invisible — but if a
+		// future change decouples them (e.g. the
+		// pinger gets its own deadline independent
+		// of the connection's lifetime), the outer
+		// ctx would let a write sneak through
+		// against a conn the pinger has already
+		// given up on.
+		if err := d.WriteEnvelope(pingCtx, env); err != nil {
 			if d.OnError != nil {
 				d.OnError(fmt.Errorf("wire: ping write: %w", err), env)
 			}
