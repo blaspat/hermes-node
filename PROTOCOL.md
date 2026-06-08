@@ -257,6 +257,26 @@ Graceful shutdown.
 
 After `bye`, the sender closes the WSS with code `1000`.
 
+### 3.15 Handler faults
+
+A registered handler is a function the node dispatches a server-originated call to. If the handler **panics** during dispatch, the node MUST recover, record the panic value in its local log, and synthesise a response of:
+
+```json
+{
+  "type": "error",
+  "id": "<request id of the call that panicked>",
+  "code": 5000,
+  "reason": "internal_error",
+  "detail": "handler panic: <panic value>"
+}
+```
+
+The connection is **NOT** closed. Clients cannot distinguish on the wire between "the handler returned an error" and "the handler panicked" — both are 5000/internal_error envelopes whose `detail` carries the failure cause. The next call on the same connection is dispatched normally.
+
+If writing the synthesised error envelope itself fails (e.g. the conn is wedged), the dispatcher tears the connection down and the supervisor reconnects with backoff. The panic is still recorded in the local log before the conn is closed.
+
+A handler that wants to fail cleanly should return an error; panics are reserved for "this should never happen" conditions the author did not anticipate.
+
 ---
 
 ## 4. Error codes

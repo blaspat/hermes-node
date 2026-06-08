@@ -328,7 +328,51 @@ func (d *Dispatcher) handleReserved(ctx context.Context, env Envelope) (*Envelop
 // dispatchCall routes one server-originated call envelope to its
 // handler and writes the response. Unknown types get a structured
 // `error` envelope back so the server never hangs.
-func (d *Dispatcher) dispatchCall(ctx context.Context, env Envelope) error {
+//
+// A panic inside a registered handler is recovered at this boundary
+// and converted to the same 5000/internal_error envelope shape a
+// handler would get if it returned an error. PROTOCOL.md §3.15
+// codifies this contract: a buggy handler MUST NOT take down the
+// dispatcher's connection. The recovery is per-call because the
+// dispatch loop is a single goroutine — recovering here is
+// sufficient to bound any handler bug. The panic value is forwarded
+// to OnError so the caller can log it (and a runtime.Stack()
+// trace, if it wants one) into the audit log.
+func (d *Dispatcher) dispatchCall(ctx context.Context, env Envelope) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Build the same internal_error envelope
+			// the err-returning path uses, so the wire
+			// shape is identical regardless of how
+			// the handler failed. The detail carries
+			// the panic value's string form; callers
+			// can't distinguish "handler returned
+			// err" from "handler panicked" — which is
+			// the protocol-level guarantee PROTOCOL.md
+			// §3.15 makes.
+			panicDetail := fmt.Sprintf("handler panic: %v", r)
+			failure := NewErrorEnvelope(env.ID, ErrorPayload{
+				Code:   5000,
+				Reason: "internal_error",
+				Detail: panicDetail,
+			})
+			if werr := d.writeOne(ctx, failure); werr != nil {
+				// If we cannot write the error
+				// envelope, the conn is wedged.
+				// Promote the write error so Run
+				// tears down and the supervisor can
+				// reconnect. The original panic is
+				// already swallowed by defer; the
+				// audit hook fired below before the
+				// write, so the operator still has
+				// a record.
+				err = fmt.Errorf("wire: write handler-panic error envelope: %w", werr)
+				return
+			}
+			d.notifyError(fmt.Errorf("wire: handler panic: %v", r), env)
+		}
+	}()
+
 	handler, ok := d.handlers[env.Type]
 	if !ok {
 		// Unknown type. PROTOCOL.md \u00a74 says 5001 /

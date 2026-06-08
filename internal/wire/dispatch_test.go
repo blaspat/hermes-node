@@ -19,6 +19,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -519,6 +520,134 @@ func TestDispatch_ServerErrorContinuesLoop(t *testing.T) {
 	defer errMu.Unlock()
 	if errSeen == nil {
 		t.Errorf("OnError was not called for server error")
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Test: a panicking handler is recovered at the dispatchCall boundary;
+// the dispatcher synthesises a 5000/internal_error envelope echoing the
+// call's request id, fires OnError, keeps the connection open, and can
+// service subsequent calls. PROTOCOL.md §3.15 codifies this contract.
+// ----------------------------------------------------------------------------
+
+// TestDispatch_HandlerPanicRecovers asserts the four post-conditions
+// of the handler-panic recovery path (PROTOCOL.md §3.15):
+//
+//  1. The server receives a structured `error` envelope (code=5000,
+//     reason=internal_error) whose id matches the call that panicked.
+//  2. OnError is invoked with the panic value so the audit log sees it.
+//  3. The connection is NOT closed — a second call (using a different
+//     registered handler) round-trips successfully.
+//  4. The panic value appears in the `detail` field so the operator
+//     can diagnose from logs without a debugger attached.
+func TestDispatch_HandlerPanicRecovers(t *testing.T) {
+	pair := newConnPair(t)
+	d := newTestDispatcher(t, pair.client)
+
+	// The panicking handler. A typed string panic value is the
+	// easiest to assert against — strings survive
+	// runtime/debug.Stack, reflect, fmt.Sprintf, and the
+	// gorilla/websocket JSON encoder without surprises.
+	panicValue := "kaboom: handler intentionally exploded"
+	handler := func(ctx context.Context, requestID string, payload map[string]any) (Envelope, error) {
+		panic(panicValue)
+	}
+	if err := d.Register(TypeExec, handler); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	// Register a second handler on a different type so we can
+	// prove the dispatcher is still routing after the panic.
+	// Same dispatcher, same goroutine, second call lands cleanly.
+	var secondCall atomic.Int32
+	if err := d.Register(TypeRead, func(ctx context.Context, requestID string, payload map[string]any) (Envelope, error) {
+		secondCall.Add(1)
+		return NewReadResultEnvelope(requestID, ReadResultPayload{
+			Status:    "ok",
+			ContentB64: "aGkK", // base64("hi\n")
+			SizeBytes: 3,
+		}), nil
+	}); err != nil {
+		t.Fatalf("Register read: %v", err)
+	}
+
+	// Capture OnError invocations.
+	var (
+		errMu   sync.Mutex
+		errSeen error
+	)
+	d.OnError = func(err error, _ Envelope) {
+		errMu.Lock()
+		defer errMu.Unlock()
+		errSeen = err
+	}
+
+	_, _ = runDispatcher(t, d)
+
+	// 1. Drive the call that will panic.
+	writeServerJSON(t, pair.server, map[string]any{
+		"id":      "req-panic-1",
+		"type":    "exec",
+		"command": "true",
+	})
+
+	// 2. Read the error envelope the dispatcher should have
+	// synthesised in place of the panicked handler's response.
+	resp := readServerJSON(t, pair.server)
+
+	if resp["type"] != "error" {
+		t.Errorf("after panic, response type: got %q, want error", resp["type"])
+	}
+	if resp["id"] != "req-panic-1" {
+		t.Errorf("after panic, response id: got %q, want req-panic-1 (call id must be echoed)", resp["id"])
+	}
+	if got := resp["code"]; got != float64(5000) {
+		t.Errorf("after panic, response code: got %v, want 5000 (internal_error per PROTOCOL.md §4)", got)
+	}
+	if got := resp["reason"]; got != "internal_error" {
+		t.Errorf("after panic, response reason: got %q, want internal_error", got)
+	}
+	// 4. The protocol contract (PROTOCOL.md §3.15) is "the wire
+	// shape is the same 5000/internal_error a handler would get
+	// by returning an error; the detail is the panic value".
+	// The dispatcher's exact prefix isn't part of the contract
+	// — only the panic value's presence is — so we assert
+	// containment rather than equality, leaving room to evolve
+	// the prefix (e.g. "handler panic: %v" → "panic: %v" → a
+	// structured field) without breaking the test.
+	if got, ok := resp["detail"].(string); !ok || !strings.Contains(got, panicValue) {
+		t.Errorf("after panic, response detail: got %q, want it to contain %q (panic value must surface to the wire)", resp["detail"], panicValue)
+	}
+
+	// 3. The dispatcher must still be alive. Drive a second
+	// call (different type, different handler) and assert
+	// its normal response comes back. If the panic had torn
+	// down the dispatch goroutine, this read would either
+	// hang or return an error.
+	writeServerJSON(t, pair.server, map[string]any{
+		"id":   "req-after-panic",
+		"type": "read",
+		"path": "/etc/hostname",
+	})
+	resp2 := readServerJSON(t, pair.server)
+	if resp2["type"] != "read_result" {
+		t.Errorf("after panic, second response type: got %q, want read_result (dispatcher must still be running)", resp2["type"])
+	}
+	if resp2["id"] != "req-after-panic" {
+		t.Errorf("after panic, second response id: got %q, want req-after-panic", resp2["id"])
+	}
+	if got := secondCall.Load(); got != 1 {
+		t.Errorf("after panic, second handler invocations: got %d, want 1 (panic must not poison the loop)", got)
+	}
+
+	// 4. OnError was invoked with the panic value.
+	errMu.Lock()
+	defer errMu.Unlock()
+	if errSeen == nil {
+		t.Fatal("OnError was not called for handler panic")
+	}
+	if !strings.Contains(errSeen.Error(), panicValue) {
+		t.Errorf("OnError error text: got %q, want it to contain %q (panic value must surface to the audit log)", errSeen.Error(), panicValue)
 	}
 }
 
