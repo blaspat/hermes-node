@@ -48,7 +48,7 @@ hermes-node pair --server wss://vps.yourdomain.com:6969 --token abcdef1234567890
 # connects, authenticates, and goes idle in the background
 ```
 
-That's the whole flow. Kate (or any Hermes brain) can now run shell commands and read/write files on this laptop.
+That's the whole flow. The agent (or any Hermes brain) can now run shell commands and read/write files on this laptop.
 
 ## Configuration
 
@@ -108,7 +108,7 @@ log_path = "/Users/patrick/.hermes-nodes/audit.log"   # default
 │  - shell exec                │   commands + results         │  (Python, pip-installed)     │
 │  - file read/write           │                               │  - node_server.py            │
 │  - cwd persistence           │                               │  - registers as a Hermes env  │
-│  - audit log                 │                               │  - Kate calls via tools      │
+│  - audit log                 │                               │  - the agent calls via tools  │
 └──────────────────────────────┘                               └──────────────────────────────┘
 ```
 
@@ -150,8 +150,7 @@ See the **server-side** [`SECURITY-REVIEW.md`](https://github.com/blaspat/hermes
 
 - **[hermes-nodes-plugin](https://github.com/blaspat/hermes-nodes-plugin)** — the Python server-side plugin that runs on the VPS
 - **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** — the agent framework this plugs into
-- **[OpenClaw](https://docs.openclaw.ai/nodes)** — the design pattern this is inspired by (we don't share the protocol)
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
