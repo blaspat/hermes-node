@@ -28,6 +28,21 @@ Both installers:
 
 **No admin rights required. No Python. No npm. One static binary.**
 
+### Building from source (no release yet, or for development)
+
+If no release has been cut for your platform, or you want to live on `main`, pass `--from-source` to the installer. It will `git clone` the repo into a temp dir, `go build` it (CGO disabled, static binary), and install the result. Requires `git` and `go 1.22+` on your `PATH`.
+
+```bash
+# One-shot: download install.sh, then run with --from-source
+curl -sSL https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.sh | sh -s -- --from-source
+```
+
+Other useful flags:
+- `--no-service` — install the binary but skip the launchd / systemd registration (you'll start it manually)
+- `--uninstall` — remove the binary and the service registration
+- `--print-layout` — show where the binary and service file would land, then exit
+- `--dry-run` — show what would happen, change nothing
+
 ## Pair with a Hermes brain
 
 After installing, you need a token from the server. On your VPS:
