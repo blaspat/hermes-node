@@ -83,6 +83,13 @@ type DialOptions struct {
 	// Build it via config.BuildTLSConfig if you're wiring main.go
 	// from a [server] section; that helper honours ca_cert (PEM
 	// bundle) and pinned_cert_sha256 (leaf pin) per PROTOCOL.md §7.
+	//
+	// TLSConfig is read at dial time only; the same instance may be
+	// safely shared across reconnect cycles. VerifyConnection
+	// captures the pin bytes by closure, and RootCAs is a
+	// *x509.CertPool the caller should treat as immutable once
+	// handed over. A future maintainer should not construct a
+	// per-call closure here.
 	TLSConfig *tls.Config
 }
 

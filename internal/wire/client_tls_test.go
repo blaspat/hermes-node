@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -237,10 +238,17 @@ func TestConnect_RejectsUntrustedCA(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected Connect to fail when RootCAs does not trust server cert")
 	}
-	// "x509" appears in the Go stdlib's chain verification error
-	// message; "unknown authority" or "certificate signed by
-	// unknown" might also appear. Be lenient: any error is fine,
-	// we just need to confirm the dial was rejected.
+	// Tighten the assertion: a positive check that the failure
+	// came from the x509 chain-verification layer (not some other
+	// dial-time error). The Go stdlib prefixes chain verification
+	// failures with "x509: ", e.g. "x509: certificate signed by
+	// unknown authority". A refactor that changes the failure
+	// layer (e.g. moves to a custom VerifyPeer callback) would
+	// still need to keep chain verification firing for this test
+	// to pass — which is what we want.
+	if !strings.Contains(err.Error(), "x509") {
+		t.Fatalf("expected x509 chain-verification error, got: %v", err)
+	}
 }
 
 // TestConnect_AcceptsCustomCA: the operator's ca_cert contains the
@@ -277,14 +285,15 @@ func ctx5s(t *testing.T) context.Context {
 	return ctx
 }
 
+// errPinMismatch and errNoPeerCert are sentinels for tests that
+// exercise VerifyConnection failure paths. They live here (not in
+// production code) because the production VerifyConnection in
+// config.BuildTLSConfig constructs its own error messages inline;
+// the test callbacks just need a stable error to return.
 var (
-	errNoPeerCert   = stringErr("no peer certificate")
-	errPinMismatch  = stringErr("peer certificate sha256 does not match pinned")
+	errPinMismatch = errors.New("peer certificate sha256 does not match pinned")
+	errNoPeerCert  = errors.New("no peer certificate")
 )
-
-type stringErr string
-
-func (e stringErr) Error() string { return string(e) }
 
 // unrelatedSelfSignedPEM returns a self-signed cert unrelated to
 // the test server. It's used to build a RootCAs pool that

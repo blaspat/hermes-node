@@ -21,10 +21,12 @@ import (
 // The pin is enforced via tls.Config.VerifyConnection, which runs
 // AFTER the standard chain verification (so RootCAs must trust the
 // chain). When the operator configures only a pin (no ca_cert), we
-// still set RootCAs to the system pool so chain verification can
-// succeed; the pin then short-circuits the dial if the leaf hash
-// doesn't match. This matches the PROTOCOL.md §7 contract: pinning
-// is supported, but always layered on top of a trusted chain.
+// leave RootCAs nil: Go's TLS stack falls back to the system pool
+// at handshake time, so chain verification can succeed against a
+// public-CA leaf. The pin then short-circuits the dial if the leaf
+// hash doesn't match. This matches the PROTOCOL.md §7 contract:
+// pinning is supported, but always layered on top of a trusted
+// chain.
 //
 // A malformed pin (non-hex, wrong length) is a configuration error
 // and returns an error rather than falling through to "trust
