@@ -187,10 +187,10 @@ func TestReadHandler_FileNotFound(t *testing.T) {
 	}
 }
 
-// TestReadHandler_AllowlistUnset is the "operator trusts
-// everything" path: a FileSystem with no allowed list reads any
-// file. Mirrors the exec handler's CwdAllowlistUnset test.
-func TestReadHandler_AllowlistUnset(t *testing.T) {
+// TestReadHandler_AllowlistEmpty_RejectsAll verifies that a
+// FileSystem with no allowed list rejects every path (deny-by-
+// default). Mirrors the exec handler's CwdAllowlistEmpty test.
+func TestReadHandler_AllowlistEmpty_RejectsAll(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "x.txt")
 	if err := os.WriteFile(target, []byte("ok"), 0o644); err != nil {
@@ -199,24 +199,24 @@ func TestReadHandler_AllowlistUnset(t *testing.T) {
 
 	pair := newConnPair(t)
 	d := newTestDispatcher(t, pair.client)
-	fsys := NewFileSystem(nil, nil) // nil allowed
+	fsys := NewFileSystem(nil, nil) // nil allowed = deny all
 	if err := d.Register(TypeRead, fsys.ReadHandler); err != nil {
 		t.Fatalf("Register read: %v", err)
 	}
 	_, _ = runDispatcher(t, d)
 
 	writeServerJSON(t, pair.server, map[string]any{
-		"id":   "req-read-open",
+		"id":   "req-read-denied",
 		"type": "read",
 		"path": target,
 	})
 	resp := readEnvelope(t, pair)
 
-	if resp["status"] != "ok" {
-		t.Errorf("response status: got %q, want ok (no allowlist = no check)", resp["status"])
+	if resp["status"] != "error" {
+		t.Errorf("response status: got %q, want error (empty allowlist = deny all)", resp["status"])
 	}
-	if encoded, _ := resp["content_b64"].(string); encoded == "" {
-		t.Errorf("content_b64 empty on success")
+	if resp["error"] != "path_not_allowed" {
+		t.Errorf("response error: got %q, want path_not_allowed", resp["error"])
 	}
 }
 
