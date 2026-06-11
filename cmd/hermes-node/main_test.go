@@ -45,20 +45,20 @@ func TestParseGlobalArgs(t *testing.T) {
 		{
 			name:       "no args",
 			args:       nil,
-			wantConfig: defaultConfigPath(),
+			wantConfig: testDefaultConfigPath(),
 			wantSub:    nil,
 		},
 		{
-			name:        "version flag",
-			args:        []string{"--version"},
+			name:       "version flag",
+			args:       []string{"--version"},
 			wantVersion: true,
-			wantConfig:  defaultConfigPath(),
+			wantConfig: testDefaultConfigPath(),
 		},
 		{
 			name:       "help short",
 			args:       []string{"-h"},
 			wantHelp:   true,
-			wantConfig: defaultConfigPath(),
+			wantConfig: testDefaultConfigPath(),
 		},
 		{
 			name:       "config before subcommand",
@@ -86,11 +86,11 @@ func TestParseGlobalArgs(t *testing.T) {
 			wantSub:    []string{"pair", "--server", "wss://x"},
 		},
 		{
-			name:        "version flag mixed with subcommand",
-			args:        []string{"pair", "--version", "--server", "wss://x"},
+			name:       "version flag mixed with subcommand",
+			args:       []string{"pair", "--version", "--server", "wss://x"},
 			wantVersion: true,
-			wantConfig:  defaultConfigPath(),
-			wantSub:     []string{"pair", "--server", "wss://x"},
+			wantConfig: testDefaultConfigPath(),
+			wantSub:    []string{"pair", "--server", "wss://x"},
 		},
 		{
 			name:    "config without value",
@@ -100,7 +100,7 @@ func TestParseGlobalArgs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ver, hlp, cfg, sub, err := parseGlobalArgs(tc.args)
+			ver, hlp, cfg, defaultCfgErr, sub, err := parseGlobalArgs(tc.args)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("parseGlobalArgs(%v) returned nil error; want one", tc.args)
@@ -109,6 +109,12 @@ func TestParseGlobalArgs(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("parseGlobalArgs(%v): %v", tc.args, err)
+			}
+			// In a normal test environment $HOME is set, so the
+			// default-path derivation should succeed. If a test
+			// ever runs with $HOME unset, fail loudly.
+			if defaultCfgErr != nil {
+				t.Fatalf("parseGlobalArgs(%v): defaultCfgErr = %v, want nil", tc.args, defaultCfgErr)
 			}
 			if *ver != tc.wantVersion {
 				t.Errorf("version = %v, want %v", *ver, tc.wantVersion)
@@ -137,6 +143,17 @@ func TestRun_PairSubcommand_WritesConfig(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "paired") {
 		t.Errorf("stdout should mention 'paired'; got %q", stdout.String())
+	}
+	// The pair stdout message (W3 + S5) must warn that the
+	// default [node].name is unusable and that an empty
+	// [node].allowed_paths will reject all calls. Operators
+	// who don't see this and then run the service will hit
+	// silent auth failures or no-op handlers.
+	if !strings.Contains(stdout.String(), "auth_err/invalid_token") {
+		t.Errorf("pair stdout should warn that the default [node].name triggers auth_err/invalid_token; got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "[node].allowed_paths") {
+		t.Errorf("pair stdout should mention [node].allowed_paths; got %q", stdout.String())
 	}
 
 	// File should exist with 0600 mode on Unix.
@@ -345,29 +362,6 @@ func (fs *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// driveFakeServer installs a canned exec_result, then sends a
-// synthetic `exec` call to the running node and reads back the
-// response. It uses a second WebSocket client connected to the same
-// fake server (the fake server only accepts one connection, so this
-// is just a stub for the canonical scenario — for the actual
-// end-to-end we use the run subcommand in a goroutine and watch
-// from outside).
-func driveFakeServer(t *testing.T, fs *fakeServer, execEnv map[string]any) {
-	t.Helper()
-	fs.setNextResp(execEnv)
-	// The server's read loop is the only consumer; we don't need to
-	// push from here in the happy path. The test goroutine just
-	// waits for the connection to land.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if fs.connected.Load() > 0 {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatal("fake server never saw a client connect")
-}
-
 // TestRun_ConnectsToServer is the smoke test: stand up the fake
 // server, write a config pointing at it, run `hermes-node run` in a
 // goroutine, wait for the supervisor to log "connecting" then
@@ -470,6 +464,20 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// testDefaultConfigPath is a small wrapper that returns the same
+// value as defaultConfigPath but panics on error, so the test
+// cases can use it as a single-value expression. Tests run in a
+// normal environment where $HOME is set; if that ever changes the
+// panic will surface as a clear test failure rather than a
+// confusing table-row mismatch.
+func testDefaultConfigPath() string {
+	p, err := defaultConfigPath()
+	if err != nil {
+		panic("testDefaultConfigPath: " + err.Error())
+	}
+	return p
 }
 
 // waitFor polls cond every tick until it returns true or timeout

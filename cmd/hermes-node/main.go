@@ -25,6 +25,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"sync"
 	"syscall"
 
 	"github.com/blaspat/hermes-nodes/internal/audit"
@@ -68,7 +70,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// doesn't gracefully handle flags-after-subcommand, and the
 	// alternative (passing --config to every subcommand's FlagSet
 	// separately) duplicates the parsing logic.
-	showVersion, showHelp, configPath, subArgs, err := parseGlobalArgs(args)
+	showVersion, showHelp, configPath, defaultCfgErr, subArgs, err := parseGlobalArgs(args)
 	if err != nil {
 		fmt.Fprintln(stderr, err.Error())
 		return 2
@@ -86,6 +88,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(subArgs) == 0 {
 		fmt.Fprintln(stderr, "hermes-node: missing subcommand (run 'hermes-node --help')")
 		return 2
+	}
+
+	// The `run` subcommand is the only one that must have a usable
+	// config path; surface defaultCfgErr here (and only here) so
+	// version/help work even when $HOME is unset, and pair does
+	// too because pair is also a write path that will surface a
+	// clearer error from config.Save.
+	if (subArgs[0] == "run" || subArgs[0] == "pair") && *configPath == "" && defaultCfgErr != nil {
+		fmt.Fprintf(stderr, "hermes-node: %v (pass --config <path> to override)\n", defaultCfgErr)
+		return 1
 	}
 
 	switch subArgs[0] {
@@ -123,12 +135,24 @@ func runRunWithSignalCtx(configPath string, stdout, stderr io.Writer) int {
 // token is the subcommand keyword; everything after it is the
 // subcommand's own arg list, handed back verbatim to its FlagSet.
 //
+// The second return value is the error from deriving the default
+// config path (i.e. $HOME is unset). It is propagated to the caller
+// so the run subcommand can fail loudly; the version / help / pair
+// subcommands don't need a path and can proceed without it.
+//
 // This means the subcommand keyword itself must not begin with `-`.
 // That's the same constraint the standard Go `flag` package enforces.
-func parseGlobalArgs(args []string) (showVersion, showHelp *bool, configPath *string, subArgs []string, err error) {
+func parseGlobalArgs(args []string) (showVersion, showHelp *bool, configPath *string, defaultCfgErr error, subArgs []string, err error) {
 	version := false
 	help := false
-	cfg := defaultConfigPath()
+	cfg, derr := defaultConfigPath()
+	defaultCfgErr = derr
+	if derr != nil {
+		// We can still parse args and dispatch subcommands
+		// that don't need a path. The run subcommand will
+		// surface this error itself.
+		cfg = ""
+	}
 	subArgs = []string{}
 
 	for i := 0; i < len(args); i++ {
@@ -142,7 +166,7 @@ func parseGlobalArgs(args []string) (showVersion, showHelp *bool, configPath *st
 			continue
 		case "--config":
 			if i+1 >= len(args) {
-				return nil, nil, nil, nil, errors.New("hermes-node: --config requires a path argument")
+				return nil, nil, nil, nil, nil, errors.New("hermes-node: --config requires a path argument")
 			}
 			cfg = args[i+1]
 			i++ // skip the value
@@ -154,7 +178,7 @@ func parseGlobalArgs(args []string) (showVersion, showHelp *bool, configPath *st
 		}
 		subArgs = append(subArgs, a)
 	}
-	return &version, &help, &cfg, subArgs, nil
+	return &version, &help, &cfg, defaultCfgErr, subArgs, nil
 }
 
 // stripFlagValue handles --name=value form for a single known flag.
@@ -210,7 +234,18 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "hermes-node: paired. Config written to %s (mode 0600).\n", configPath)
-	fmt.Fprintf(stdout, "  Edit %s to set [node].name and [node].allowed_paths, then start the service with 'hermes-node run'.\n", configPath)
+	fmt.Fprintf(stdout, "\n")
+	fmt.Fprintf(stdout, "  Before starting the service, edit %s to set:\n", configPath)
+	fmt.Fprintf(stdout, "    [node].name           — must match the name the server issued the token for.\n")
+	fmt.Fprintf(stdout, "                           The default here is the filename; the server will\n")
+	fmt.Fprintf(stdout, "                           reject mismatched names with auth_err/invalid_token\n")
+	fmt.Fprintf(stdout, "                           (PROTOCOL.md §3.4 / §3.5) and the node will silently\n")
+	fmt.Fprintf(stdout, "                           fail to authenticate.\n")
+	fmt.Fprintf(stdout, "    [node].allowed_paths  — list of filesystem roots exec/read/write can touch.\n")
+	fmt.Fprintf(stdout, "                           Empty list (the default) means every path is\n")
+	fmt.Fprintf(stdout, "                           rejected by the handlers. See SECURITY-REVIEW.md.\n")
+	fmt.Fprintf(stdout, "\n")
+	fmt.Fprintf(stdout, "  Then start the service: hermes-node run\n")
 	return 0
 }
 
@@ -243,6 +278,18 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 	fmt.Fprintf(stdout, "hermes-node %s: connecting to %s as %q (%d allowed paths)\n",
 		version, cfg.Node.ServerURL, cfg.Node.Name, len(cfg.Node.AllowedPaths))
 
+	// prevSession tracks the persistent shell from the previous
+	// (re)connect, so we can close it before allocating a new
+	// one. Without this, a flaky-network operator leaks one
+	// bash PID per reconnect (Go does not reap subprocesses
+	// when a *Session reference is dropped). Quinn's review
+	// flagged this as the only finding a real operator could
+	// trip over.
+	var (
+		prevSessionMu sync.Mutex
+		prevSession   *execer.Session
+	)
+
 	sup, err := wire.NewSupervisor(wire.SupervisorOptions{
 		Dialer: func(ctx context.Context) (*wire.Client, error) {
 			return wire.Connect(ctx, wire.DialOptions{
@@ -265,29 +312,45 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 			d.OnRead = p.MarkAlive
 			// Surface wire-level errors (handler panics, write
 			// failures) to the operator via stderr AND the audit
-			// log. Without this hook the panic-recovery path
+			// log, with the panic stack included so a postmortem
+			// grep has the trace, not just the panic value.
+			// Without the OnError hook the panic-recovery path
 			// in dispatch.go is invisible to the operator.
 			d.OnError = func(err error, env wire.Envelope) {
-				fmt.Fprintf(stderr, "hermes-node: dispatch error: %v (type=%s id=%s)\n",
-					err, env.Type, env.ID)
+				stack := debug.Stack()
+				fmt.Fprintf(stderr, "hermes-node: dispatch error: %v (type=%s id=%s)\n%s\n",
+					err, env.Type, env.ID, stack)
 				_ = auditLog.Write(audit.Entry{
 					Action: "dispatch_error",
-					Target: err.Error(),
+					Target: err.Error() + "\n" + string(stack),
 					Status: "error",
 				})
+			}
+
+			// Close the previous session before opening a new
+			// one so a flaky-network operator doesn't leak bash
+			// PIDs across reconnects. Close is idempotent and
+			// safe even if the previous session's bash already
+			// exited (failPending on the demuxer is a no-op).
+			prevSessionMu.Lock()
+			old := prevSession
+			prevSession = nil
+			prevSessionMu.Unlock()
+			if old != nil {
+				_ = old.Close()
 			}
 
 			session, err := execer.NewSession(ctx)
 			if err != nil {
 				return fmt.Errorf("start shell: %w", err)
 			}
-			// The session outlives the Setup call. We rely on
-			// the supervisor's defer closing the conn to make
-			// `d.Run` return; the session is then garbage-
-			// collected on the next Setup. A future v0.2 could
-			// close the session here to reclaim the bash PID
-			// immediately on reconnect.
-			_ = session
+			// Publish the new session so the next Setup call
+			// can close it. We intentionally do NOT close it
+			// here — the session is meant to live for the
+			// lifetime of the connection.
+			prevSessionMu.Lock()
+			prevSession = session
+			prevSessionMu.Unlock()
 
 			execHandler := wire.NewExecHandler(
 				execer.NewSessionAdapter(session),
@@ -327,14 +390,15 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 }
 
 // defaultConfigPath returns the operator-default location for
-// config.toml. It mirrors defaultLogPath in internal/config — a future
-// refactor could centralise both into one "hermes-nodes home dir" helper.
-func defaultConfigPath() string {
+// config.toml. It mirrors defaultLogPath in internal/config —
+// returns an error if the home directory cannot be determined,
+// rather than silently producing a relative path that would
+// resolve to the current working directory and confuse the
+// operator with a "file not found" error whose path is a lie.
+func defaultConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		// Fall back to a relative path; the operator can pass
-		// --config explicitly if the default doesn't work.
-		return "config.toml"
+		return "", fmt.Errorf("could not determine home directory for default config path: %w", err)
 	}
-	return filepath.Join(home, ".hermes-nodes", "config.toml")
+	return filepath.Join(home, ".hermes-nodes", "config.toml"), nil
 }

@@ -230,6 +230,32 @@ func TestSave_RefusesToOverwrite(t *testing.T) {
 	}
 }
 
+// TestSave_CreatesFile0600 is the unit-level counterpart to the
+// integration check in TestRun_PairSubcommand_WritesConfig. Saving
+// a fresh config must produce a file with mode 0600 on Unix so the
+// pre-shared token is not world-readable. The integration test
+// covers the round-trip; this one localises the mode guarantee.
+func TestSave_CreatesFile0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file mode bits are not enforced on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cfg := &Config{
+		Node: NodeConfig{ServerURL: "wss://x", Name: "y", Token: "z"},
+	}
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("file mode = %#o, want 0o600", perm)
+	}
+}
+
 func TestSave_RejectsIncompleteConfig(t *testing.T) {
 	dir := t.TempDir()
 	cases := []struct {
