@@ -57,8 +57,13 @@ const TruncationMarker = "\n[hermes-node: output truncated at 10MB]\n"
 // ignored by the shell itself — the handler still uses it for the
 // pre-flight fs.Check, so the allowlist guardrail is in place
 // before the command runs.
+//
+// Cwd returns the shell's current working directory. Used by the
+// handler to resolve the effective cwd when the exec payload omits
+// it, ensuring the allowlist check still applies.
 type Executer interface {
 	Run(ctx context.Context, target, cmd string) (stdout, stderr string, exit int, err error)
+	Cwd() string
 }
 
 // AuditWriter is the subset of audit.Writer this handler depends on.
@@ -150,27 +155,34 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Pre-flight: if the caller asked for a specific cwd, it must sit
-	// inside the configured allowlist. We validate before launching bash
-	// so a denied path is recorded as a structured error rather than a
-	// generic "shell exited 1". An empty Allowed list rejects every cwd
-	// (deny-by-default); operators who want wide-open access must
-	// configure an explicit root, e.g. allowed_paths = ["/"].
-	if p.Cwd != "" {
-		ok, _, err := fs.Check(h.Allowed, p.Cwd)
-		if err != nil || !ok {
-			h.auditExec(p, audit.Entry{
-				TS:     h.now(),
-				Action: "exec",
-				Target: p.Cwd,
-				Status: "error",
-			})
-			return NewExecResultEnvelope(requestID, ExecResultPayload{
-				Status:     "error",
-				ExitCode:   -1,
-				DurationMS: 0,
-			}), nil
+	// Pre-flight: resolve the effective working directory. When the
+	// call omits cwd, we pull the shell's current cwd so the
+	// allowlist check still applies — a previous Run that `cd`'d
+	// into /etc should not let a follow-up (no-cwd) call run there
+	// unchecked. An empty Allowed list rejects every cwd (deny-by-
+	// default); operators who want wide-open access must configure
+	// an explicit root, e.g. allowed_paths = ["/"].
+	cwd := p.Cwd
+	if cwd == "" {
+		cwd = h.Shell.Cwd()
+	}
+	ok, _, err := fs.Check(h.Allowed, cwd)
+	if err != nil || !ok {
+		auditTarget := cwd
+		if auditTarget == "" {
+			auditTarget = p.Command
 		}
+		h.auditExec(p, audit.Entry{
+			TS:     h.now(),
+			Action: "exec",
+			Target: auditTarget,
+			Status: "error",
+		})
+		return NewExecResultEnvelope(requestID, ExecResultPayload{
+			Status:     "error",
+			ExitCode:   -1,
+			DurationMS: 0,
+		}), nil
 	}
 
 	// Run the command. The shell owns the env/timeout enforcement
@@ -183,7 +195,7 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// ignored. The protocol field is preserved in the decoded
 	// payload so the upgrade is mechanical.
 	start := h.now()
-	stdout, stderr, exit, runErr := h.Shell.Run(callCtx, p.Cwd, p.Command)
+	stdout, stderr, exit, runErr := h.Shell.Run(callCtx, cwd, p.Command)
 	duration := h.now().Sub(start)
 
 	// Cap each stream independently. capOutput is total to the
@@ -220,10 +232,14 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// upstream but does not fail the call — the user's command
 	// already ran, the operator can re-derive the row from the
 	// exec_result.
+	target := p.Command
+	if cwd != "" {
+		target = cwd + " :: " + p.Command
+	}
 	entry := audit.Entry{
 		TS:         start,
 		Action:     "exec",
-		Target:     p.Command,
+		Target:     target,
 		DurationMs: duration.Milliseconds(),
 		ExitCode:   exit,
 		Status:     status,
@@ -233,16 +249,12 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	return NewExecResultEnvelope(requestID, result), nil
 }
 
-// auditExec writes the audit entry if a log is configured. The Target
-// field is overridden when p.Cwd is set: in that case the call's
-// effective working directory is more useful for postmortems than
-// the bare command line.
+// auditExec writes the audit entry if a log is configured. The
+// caller is responsible for building the Target field with the
+// resolved working directory (see Handle for the format).
 func (h *ExecHandler) auditExec(p ExecPayload, e audit.Entry) {
 	if h.AuditLog == nil {
 		return
-	}
-	if p.Cwd != "" && e.Target == p.Command {
-		e.Target = p.Cwd + " :: " + p.Command
 	}
 	_ = h.AuditLog.Write(e)
 }
@@ -277,11 +289,14 @@ func capOutput(s string, max int) (string, bool) {
 // mockExecuter is a configurable Executer used by the handler tests.
 // Each call records what was asked so tests can assert the handler
 // passed the right (target, cmd) through. The exit/stdout/stderr
-// fields are pre-set by the test and returned verbatim.
+// fields are pre-set by the test and returned verbatim. Cwd returns
+// the simulated current working directory of the shell.
 type mockExecuter struct {
 	target atomic.Value // string
 	cmd    atomic.Value // string
 	calls  atomic.Int32
+
+	cwd string // simulated current working directory
 
 	// out / errOut / exit / runErr are the values Run returns.
 	out    string
@@ -300,3 +315,5 @@ func (m *mockExecuter) Run(_ context.Context, target, cmd string) (string, strin
 	m.cmd.Store(cmd)
 	return m.out, m.errOut, m.exit, m.runErr
 }
+
+func (m *mockExecuter) Cwd() string { return m.cwd }
