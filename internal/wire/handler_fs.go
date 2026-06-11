@@ -124,8 +124,9 @@ func (realOS) WriteFile(path string, data []byte, perm os.FileMode, mode WriteMo
 // FileSystem is the shared dependency for read and write handlers.
 // FileIO is the os shim (mockable in tests); Allowed is the path
 // allowlist; AuditLog is the audit writer. nil/empty Allowed
-// disables path validation entirely (operator-trust mode, same
-// convention as the exec handler's cwd allowlist).
+// rejects all paths (deny-by-default). Operators who want wide-
+// open access must configure an explicit root, e.g.
+// allowed_paths = ["/"].
 type FileSystem struct {
 	IO       FileIO
 	Allowed  []string
@@ -357,12 +358,12 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 }
 
 // checkAllowed is a thin wrapper around fs.Check that returns
-// (false, "", nil) when the allowed list is nil/empty (operator-
-// trust mode). This keeps the dispatch code below it on two
-// lines instead of a conditional.
+// (false, "", fs.ErrNotAllowed) when the allowed list is nil/empty
+// (deny-by-default). Operators who want wide-open access must
+// configure an explicit root, e.g. allowed_paths = ["/"].
 func checkAllowed(allowed []string, path string) (bool, string, error) {
 	if len(allowed) == 0 {
-		return true, path, nil
+		return false, path, fspkg.ErrNotAllowed
 	}
 	return fspkg.Check(allowed, path)
 }

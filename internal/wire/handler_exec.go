@@ -70,9 +70,10 @@ type AuditWriter interface {
 
 // ExecHandler builds the wire.Handler that serves `exec` calls.
 // shell is the persistent bash session (mockable in tests). allowed
-// is the list of filesystem roots the cwd must sit inside; pass nil
-// to skip cwd validation (tests + the "node operator runs the whole
-// filesystem" trust mode). auditLog may be nil — see AuditWriter.
+// is the list of filesystem roots the cwd must sit inside; nil/empty
+// rejects every cwd (deny-by-default). Operators who want wide-open
+// access must configure an explicit root, e.g. allowed_paths = ["/"].
+// auditLog may be nil — see AuditWriter.
 type ExecHandler struct {
 	Shell    Executer
 	Allowed  []string
@@ -149,14 +150,13 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Pre-flight: if the caller asked for a specific cwd and the
-	// handler has an allowlist configured, the cwd must sit
-	// inside it. We validate before launching bash so a denied
-	// path is recorded as a structured error rather than a
-	// generic "shell exited 1". An empty/nil Allowed list
-	// disables the check entirely — the operator's "trust every
-	// cwd" mode.
-	if p.Cwd != "" && len(h.Allowed) > 0 {
+	// Pre-flight: if the caller asked for a specific cwd, it must sit
+	// inside the configured allowlist. We validate before launching bash
+	// so a denied path is recorded as a structured error rather than a
+	// generic "shell exited 1". An empty Allowed list rejects every cwd
+	// (deny-by-default); operators who want wide-open access must
+	// configure an explicit root, e.g. allowed_paths = ["/"].
+	if p.Cwd != "" {
 		ok, _, err := fs.Check(h.Allowed, p.Cwd)
 		if err != nil || !ok {
 			h.auditExec(p, audit.Entry{

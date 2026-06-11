@@ -345,18 +345,16 @@ func TestExecHandler_CwdAllowlistRejected(t *testing.T) {
 	}
 }
 
-// TestExecHandler_CwdAllowlistUnset verifies that a handler with
-// no allowed list (or an empty one) skips cwd validation — this
-// matches the "operator trusts everything" mode the dispatch
-// loop's user can opt into. Without this branch, an operator
-// running hermes-node with a deliberately open config would be
-// unable to call exec at all.
-func TestExecHandler_CwdAllowlistUnset(t *testing.T) {
+// TestExecHandler_CwdAllowlistEmpty_RejectsAll verifies that a
+// handler with no allowed list (or an empty one) rejects every
+// cwd (deny-by-default). Operators who want wide-open access must
+// configure an explicit root, e.g. allowed_paths = ["/"].
+func TestExecHandler_CwdAllowlistEmpty_RejectsAll(t *testing.T) {
 	pair := newConnPair(t)
 	d := newTestDispatcher(t, pair.client)
 
 	shell := newMockExecuter("pwd output\n", "", 0, nil)
-	h := newTestExecHandler(t, shell, nil, nil) // nil allowed roots
+	h := newTestExecHandler(t, shell, nil, nil) // nil allowed roots = reject all cwds
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -370,11 +368,12 @@ func TestExecHandler_CwdAllowlistUnset(t *testing.T) {
 	})
 
 	resp := readEnvelope(t, pair)
-	if resp["status"] != "ok" {
-		t.Errorf("response status: got %q, want ok (no allowlist = no cwd check)", resp["status"])
+	if resp["status"] != "error" {
+		t.Errorf("response status: got %q, want error (empty allowlist = reject all cwds)", resp["status"])
 	}
-	if got := shell.calls.Load(); got != 1 {
-		t.Errorf("shell invocations: got %d, want 1", got)
+	// Shell should never have been invoked — rejection is pre-flight.
+	if got := shell.calls.Load(); got != 0 {
+		t.Errorf("shell invocations: got %d, want 0 (rejected before launch)", got)
 	}
 }
 
