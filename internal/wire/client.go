@@ -7,6 +7,7 @@ package wire
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"time"
@@ -71,6 +72,18 @@ type DialOptions struct {
 	// HandshakeTimeout bounds the wait for hello_ack and auth_ok.
 	// Zero means DefaultHandshakeTimeout.
 	HandshakeTimeout time.Duration
+
+	// TLSConfig, when non-nil, is attached to a copy of
+	// websocket.DefaultDialer. The copy is used only for this one
+	// Connect call so concurrent dials don't share TLS state. When
+	// nil, DefaultDialer is used directly (its zero-valued
+	// TLSClientConfig trusts the OS CA bundle, which is correct for
+	// public CA-signed servers).
+	//
+	// Build it via config.BuildTLSConfig if you're wiring main.go
+	// from a [server] section; that helper honours ca_cert (PEM
+	// bundle) and pinned_cert_sha256 (leaf pin) per PROTOCOL.md §7.
+	TLSConfig *tls.Config
 }
 
 // withDefaults returns a copy of opts with zero-valued fields filled
@@ -125,13 +138,16 @@ func Connect(ctx context.Context, opts DialOptions) (*Client, error) {
 	wsCtx, cancel := context.WithTimeout(ctx, opts.HandshakeTimeout)
 	defer cancel()
 
-	// gorilla/websocket's DefaultDialer honours the OS CA bundle
-	// for wss:// and uses net/http for the upgrade, so test code
-	// pointing at an httptest.NewServer with a plain ws:// URL
-	// Just Works. The production path is the same; pinning a
-	// specific cert (PROTOCOL.md §7) is a Task 1.9 / 1.10 concern
-	// that lives in the reconnect / pair-config code, not here.
-	conn, _, err := websocket.DefaultDialer.DialContext(wsCtx, opts.ServerURL, nil)
+	// Build the dialer. A nil opts.TLSConfig leaves the default
+	// dialer in place (OS CA bundle, no pin). A non-nil config
+	// gets attached to a copy of DefaultDialer — we don't mutate
+	// the package-global default because that would race with
+	// other dials in the process.
+	dialer := *websocket.DefaultDialer
+	if opts.TLSConfig != nil {
+		dialer.TLSClientConfig = opts.TLSConfig
+	}
+	conn, _, err := dialer.DialContext(wsCtx, opts.ServerURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("wire: dial %s: %w", opts.ServerURL, err)
 	}
