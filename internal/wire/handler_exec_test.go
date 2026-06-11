@@ -199,7 +199,8 @@ func TestExecHandler_ShellError(t *testing.T) {
 	d := newTestDispatcher(t, pair.client)
 
 	shell := newMockExecuter("", "", -1, errors.New("shell: session is closed"))
-	h := newTestExecHandler(t, shell, nil, nil)
+	shell.cwd = "/"
+	h := newTestExecHandler(t, shell, []string{"/"}, nil)
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
