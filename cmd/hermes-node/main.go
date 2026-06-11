@@ -290,6 +290,15 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 		prevSession   *execer.Session
 	)
 
+	// Build the TLS config once, outside the Dialer closure.
+	// VerifyConnection captures the pin (if any) by closure, so
+	// the same config is safe to reuse across reconnects.
+	tlsCfg, err := config.BuildTLSConfig(cfg.Server)
+	if err != nil {
+		fmt.Fprintf(stderr, "hermes-node: %v\n", err)
+		return 1
+	}
+
 	sup, err := wire.NewSupervisor(wire.SupervisorOptions{
 		Dialer: func(ctx context.Context) (*wire.Client, error) {
 			return wire.Connect(ctx, wire.DialOptions{
@@ -300,6 +309,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				Platform:     runtime.GOOS,
 				Arch:         runtime.GOARCH,
 				Capabilities: []string{"exec", "read", "write"},
+				TLSConfig:    tlsCfg,
 			})
 		},
 		// Setup is invoked once per (re)connect. We build a fresh
