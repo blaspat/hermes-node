@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -13,6 +15,7 @@ func TestLoad_ValidFile(t *testing.T) {
 [node]
 server_url = "wss://vps.example.com:6969"
 name = "work-laptop"
+token = "test-token-do-not-use-in-prod"
 allowed_paths = ["/Users/patrick", "/tmp"]
 log_path = "/Users/patrick/.hermes-nodes/audit.log"
 
@@ -35,6 +38,9 @@ pinned_cert_sha256 = "a1b2c3d4e5f6"
 	if cfg.Node.Name != "work-laptop" {
 		t.Errorf("Node.Name = %q, want %q", cfg.Node.Name, "work-laptop")
 	}
+	if cfg.Node.Token != "test-token-do-not-use-in-prod" {
+		t.Errorf("Node.Token = %q, want %q", cfg.Node.Token, "test-token-do-not-use-in-prod")
+	}
 	if got, want := cfg.Node.AllowedPaths, []string{"/Users/patrick", "/tmp"}; !equalStrings(got, want) {
 		t.Errorf("Node.AllowedPaths = %v, want %v", got, want)
 	}
@@ -56,6 +62,7 @@ func TestLoad_AppliesDefaultLogPath(t *testing.T) {
 [node]
 server_url = "wss://vps.example.com:6969"
 name = "ci-runner"
+token = "ci-runner-token"
 allowed_paths = ["/tmp"]
 `
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
@@ -82,6 +89,7 @@ func TestLoad_RequiresServerURL(t *testing.T) {
 	contents := `
 [node]
 name = "work-laptop"
+token = "x"
 allowed_paths = ["/tmp"]
 `
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
@@ -99,6 +107,7 @@ func TestLoad_RequiresName(t *testing.T) {
 	contents := `
 [node]
 server_url = "wss://vps.example.com:6969"
+token = "x"
 allowed_paths = ["/tmp"]
 `
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
@@ -107,6 +116,137 @@ allowed_paths = ["/tmp"]
 
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load returned nil error; want validation error for missing node name")
+	}
+}
+
+func TestLoad_RequiresToken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	contents := `
+[node]
+server_url = "wss://vps.example.com:6969"
+name = "work-laptop"
+allowed_paths = ["/tmp"]
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load returned nil error; want validation error for missing token")
+	}
+	if !strings.Contains(err.Error(), "token is required") {
+		t.Errorf("error = %q, want it to mention 'token is required'", err.Error())
+	}
+}
+
+func TestLoad_RejectsLooseFileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file mode bits are not enforced on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	contents := `
+[node]
+server_url = "wss://vps.example.com:6969"
+name = "work-laptop"
+token = "x"
+`
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load returned nil error; want error for loose file mode")
+	}
+	if !strings.Contains(err.Error(), "0600") {
+		t.Errorf("error = %q, want it to mention 0600", err.Error())
+	}
+}
+
+func TestLoad_AcceptsTightFileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file mode bits are not enforced on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	contents := `
+[node]
+server_url = "wss://vps.example.com:6969"
+name = "work-laptop"
+token = "x"
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Errorf("Load with 0600: %v", err)
+	}
+}
+
+func TestSave_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "config.toml")
+	cfg := &Config{
+		Node: NodeConfig{
+			ServerURL:    "wss://vps.example.com:6969",
+			Name:         "work-laptop",
+			Token:        "round-trip-token",
+			AllowedPaths: []string{"/home/user"},
+		},
+	}
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after Save: %v", err)
+	}
+	if got.Node.Token != cfg.Node.Token {
+		t.Errorf("Node.Token = %q, want %q", got.Node.Token, cfg.Node.Token)
+	}
+	if got.Node.Name != cfg.Node.Name {
+		t.Errorf("Node.Name = %q, want %q", got.Node.Name, cfg.Node.Name)
+	}
+}
+
+func TestSave_RefusesToOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cfg := &Config{
+		Node: NodeConfig{ServerURL: "wss://x", Name: "y", Token: "z"},
+	}
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("first Save: %v", err)
+	}
+	// Second save with the same path must fail so a re-pair doesn't
+	// silently clobber a working config (the user's manual `rm` is
+	// the explicit "I want to start over" signal).
+	if err := Save(path, cfg); err == nil {
+		t.Fatal("second Save returned nil error; want an error refusing to overwrite")
+	}
+}
+
+func TestSave_RejectsIncompleteConfig(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		cfg  *Config
+	}{
+		{"nil", nil},
+		{"missing url", &Config{Node: NodeConfig{Name: "n", Token: "t"}}},
+		{"missing name", &Config{Node: NodeConfig{ServerURL: "wss://x", Token: "t"}}},
+		{"missing token", &Config{Node: NodeConfig{ServerURL: "wss://x", Name: "n"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := Save(filepath.Join(dir, "cfg.toml"), tc.cfg); err == nil {
+				t.Errorf("Save(%s) returned nil error; want validation error", tc.name)
+			}
+		})
 	}
 }
 
