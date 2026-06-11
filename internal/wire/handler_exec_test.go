@@ -84,8 +84,9 @@ func TestExecHandler_HappyPath(t *testing.T) {
 	d := newTestDispatcher(t, pair.client)
 
 	shell := newMockExecuter("hi\n", "", 0, nil)
+	shell.cwd = "/"
 	rec := &recordingAudit{}
-	h := newTestExecHandler(t, shell, nil, rec)
+	h := newTestExecHandler(t, shell, []string{"/"}, rec)
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -121,8 +122,8 @@ func TestExecHandler_HappyPath(t *testing.T) {
 	if got := shell.calls.Load(); got != 1 {
 		t.Errorf("shell invocations: got %d, want 1", got)
 	}
-	if got, _ := shell.target.Load().(string); got != "" {
-		t.Errorf("shell target: got %q, want empty (no cwd in request)", got)
+	if got, _ := shell.target.Load().(string); got != "/" {
+		t.Errorf("shell target: got %q, want / (resolved cwd)", got)
 	}
 	if got, _ := shell.cmd.Load().(string); got != "echo hi" {
 		t.Errorf("shell cmd: got %q, want echo hi", got)
@@ -137,8 +138,8 @@ func TestExecHandler_HappyPath(t *testing.T) {
 	if e.Action != "exec" {
 		t.Errorf("audit action: got %q, want exec", e.Action)
 	}
-	if e.Target != "echo hi" {
-		t.Errorf("audit target: got %q, want echo hi", e.Target)
+	if e.Target != "/ :: echo hi" {
+		t.Errorf("audit target: got %q, want \"/ :: echo hi\"", e.Target)
 	}
 	if e.ExitCode != 0 {
 		t.Errorf("audit exit_code: got %d, want 0", e.ExitCode)
@@ -159,7 +160,8 @@ func TestExecHandler_NonZeroExit(t *testing.T) {
 	d := newTestDispatcher(t, pair.client)
 
 	shell := newMockExecuter("oops\n", "stack trace\n", 1, nil)
-	h := newTestExecHandler(t, shell, nil, nil)
+	shell.cwd = "/"
+	h := newTestExecHandler(t, shell, []string{"/"}, nil)
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -197,7 +199,8 @@ func TestExecHandler_ShellError(t *testing.T) {
 	d := newTestDispatcher(t, pair.client)
 
 	shell := newMockExecuter("", "", -1, errors.New("shell: session is closed"))
-	h := newTestExecHandler(t, shell, nil, nil)
+	shell.cwd = "/"
+	h := newTestExecHandler(t, shell, []string{"/"}, nil)
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -230,8 +233,8 @@ func TestExecHandler_Timeout(t *testing.T) {
 	// Mock shell blocks on the ctx, then returns DeadlineExceeded
 	// when the handler's per-call ctx fires. We use 100ms timeout
 	// so the test runs in well under a second.
-	shell := &ctxBlockingMock{}
-	h := newTestExecHandler(t, shell, nil, nil)
+	shell := &ctxBlockingMock{cwd: "/"}
+	h := newTestExecHandler(t, shell, []string{"/"}, nil)
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -377,13 +380,133 @@ func TestExecHandler_CwdAllowlistEmpty_RejectsAll(t *testing.T) {
 	}
 }
 
+// TestExecHandler_RejectsImplicitCwdOutsideAllowlist verifies that
+// an exec with no cwd field is still checked against the allowlist
+// by resolving the cwd from the shell. If the shell's current cwd
+// is outside the allowlist, the call must be rejected.
+func TestExecHandler_RejectsImplicitCwdOutsideAllowlist(t *testing.T) {
+	pair := newConnPair(t)
+	d := newTestDispatcher(t, pair.client)
+
+	shell := newMockExecuter("", "", 0, nil)
+	shell.cwd = "/etc"                              // shell is in /etc
+	h := newTestExecHandler(t, shell, []string{"/home/user"}, nil) // allowlist = /home
+	if err := d.Register(TypeExec, h.Handle); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	_, _ = runDispatcher(t, d)
+
+	// No cwd in payload — handler must resolve from shell.
+	writeServerJSON(t, pair.server, map[string]any{
+		"id":      "req-implicit-cwd-reject",
+		"type":    "exec",
+		"command": "pwd",
+	})
+
+	resp := readEnvelope(t, pair)
+	if resp["type"] != "exec_result" {
+		t.Fatalf("response type: got %q, want exec_result (denial still gets a result)", resp["type"])
+	}
+	if resp["status"] != "error" {
+		t.Errorf("response status: got %q, want error (implicit cwd %q outside allowlist)", resp["status"], "/etc")
+	}
+	if code, _ := resp["exit_code"].(float64); int(code) != -1 {
+		t.Errorf("response exit_code: got %v, want -1 (denial, no shell call)", resp["exit_code"])
+	}
+	if got := shell.calls.Load(); got != 0 {
+		t.Errorf("shell invocations: got %d, want 0 (pre-flight must block the call)", got)
+	}
+}
+
+// TestExecHandler_AllowsImplicitCwdInsideAllowlist verifies that
+// an exec with no cwd field works when the shell's current cwd is
+// inside the allowlist.
+func TestExecHandler_AllowsImplicitCwdInsideAllowlist(t *testing.T) {
+	pair := newConnPair(t)
+	d := newTestDispatcher(t, pair.client)
+
+	shell := newMockExecuter("ok\n", "", 0, nil)
+	shell.cwd = "/home/user/projects"
+	h := newTestExecHandler(t, shell, []string{"/home/user"}, nil)
+	if err := d.Register(TypeExec, h.Handle); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	_, _ = runDispatcher(t, d)
+
+	writeServerJSON(t, pair.server, map[string]any{
+		"id":      "req-implicit-cwd-ok",
+		"type":    "exec",
+		"command": "echo ok",
+	})
+
+	resp := readEnvelope(t, pair)
+	if resp["type"] != "exec_result" {
+		t.Fatalf("response type: got %q, want exec_result", resp["type"])
+	}
+	if resp["status"] != "ok" {
+		t.Errorf("response status: got %q, want ok (implicit cwd %q inside allowlist)", resp["status"], "/home/user/projects")
+	}
+	if got := shell.calls.Load(); got != 1 {
+		t.Errorf("shell invocations: got %d, want 1", got)
+	}
+	// The handler must pass the resolved cwd to Run.
+	if got, _ := shell.target.Load().(string); got != "/home/user/projects" {
+		t.Errorf("shell target (resolved cwd): got %q, want %q", got, "/home/user/projects")
+	}
+}
+
+// TestExecHandler_AuditResolvesImplicitCwd verifies that the audit
+// entry's Target field contains the resolved (shell) cwd when the
+// exec payload omits cwd.
+func TestExecHandler_AuditResolvesImplicitCwd(t *testing.T) {
+	pair := newConnPair(t)
+	d := newTestDispatcher(t, pair.client)
+
+	shell := newMockExecuter("ok\n", "", 0, nil)
+	shell.cwd = "/var/log"
+	rec := &recordingAudit{}
+	h := newTestExecHandler(t, shell, []string{"/var"}, rec)
+	if err := d.Register(TypeExec, h.Handle); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	_, _ = runDispatcher(t, d)
+
+	writeServerJSON(t, pair.server, map[string]any{
+		"id":      "req-implicit-cwd-audit",
+		"type":    "exec",
+		"command": "tail -n5 syslog",
+	})
+
+	resp := readEnvelope(t, pair)
+	if resp["status"] != "ok" {
+		t.Fatalf("response status: got %q, want ok (precondition for audit assertion)", resp["status"])
+	}
+
+	entries := rec.snapshot()
+	if len(entries) != 1 {
+		t.Fatalf("audit entries: got %d, want 1", len(entries))
+	}
+	e := entries[0]
+	if e.Action != "exec" {
+		t.Errorf("audit action: got %q, want exec", e.Action)
+	}
+	wantTarget := "/var/log :: tail -n5 syslog"
+	if e.Target != wantTarget {
+		t.Errorf("audit target: got %q, want %q (resolved cwd :: command)", e.Target, wantTarget)
+	}
+	if e.Status != "ok" {
+		t.Errorf("audit status: got %q, want ok", e.Status)
+	}
+}
+
 // TestExecHandler_10MBCapStdout builds a stdout string of >10MB and
 // asserts the response truncates it, sets truncated=true, and
 // appends the marker. We don't go through the real wire here (a
 // 10MB JSON message is wasteful); we call Handle directly.
 func TestExecHandler_10MBCapStdout(t *testing.T) {
 	shell := newMockExecuter(string(make([]byte, MaxOutputBytes+1024)), "", 0, nil)
-	h := newTestExecHandler(t, shell, nil, nil)
+	shell.cwd = "/"
+	h := newTestExecHandler(t, shell, []string{"/"}, nil)
 
 	env, err := h.Handle(context.Background(), "req-big", map[string]any{
 		"command": "yes",
@@ -421,7 +544,8 @@ func TestExecHandler_10MBCapStderr(t *testing.T) {
 		string(make([]byte, MaxOutputBytes+2048)),
 		0, nil,
 	)
-	h := newTestExecHandler(t, shell, nil, nil)
+	shell.cwd = "/"
+	h := newTestExecHandler(t, shell, []string{"/"}, nil)
 
 	env, err := h.Handle(context.Background(), "req-big-err", map[string]any{
 		"command": "noisy",
@@ -452,7 +576,8 @@ func TestExecHandler_10MBCapStderr(t *testing.T) {
 func TestExecHandler_NoTruncationWhenFits(t *testing.T) {
 	// Exactly at the cap — should NOT be considered truncated.
 	shell := newMockExecuter(string(make([]byte, MaxOutputBytes)), "", 0, nil)
-	h := newTestExecHandler(t, shell, nil, nil)
+	shell.cwd = "/"
+	h := newTestExecHandler(t, shell, []string{"/"}, nil)
 
 	env, err := h.Handle(context.Background(), "req-exact", map[string]any{
 		"command": "noisy",
@@ -482,7 +607,8 @@ func TestExecHandler_TimeoutClamp(t *testing.T) {
 	pair := newConnPair(t)
 	d := newTestDispatcher(t, pair.client)
 	shell := newMockExecuter("ok\n", "", 0, nil)
-	h := newTestExecHandler(t, shell, nil, nil)
+	shell.cwd = "/"
+	h := newTestExecHandler(t, shell, []string{"/"}, nil)
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -544,8 +670,9 @@ func TestExecHandler_AuditFailureDoesNotFailCall(t *testing.T) {
 	pair := newConnPair(t)
 	d := newTestDispatcher(t, pair.client)
 	shell := newMockExecuter("ok\n", "", 0, nil)
+	shell.cwd = "/"
 	failingAudit := &failingAuditWriter{}
-	h := newTestExecHandler(t, shell, nil, failingAudit)
+	h := newTestExecHandler(t, shell, []string{"/"}, failingAudit)
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -575,8 +702,8 @@ func TestExecHandler_AuditFailureDoesNotFailCall(t *testing.T) {
 func TestExecHandler_DurationReported(t *testing.T) {
 	pair := newConnPair(t)
 	d := newTestDispatcher(t, pair.client)
-	shell := &sleepingMock{delay: 20 * time.Millisecond}
-	h := newTestExecHandler(t, shell, nil, nil)
+	shell := &sleepingMock{delay: 20 * time.Millisecond, cwd: "/"}
+	h := newTestExecHandler(t, shell, []string{"/"}, nil)
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -604,7 +731,8 @@ func TestExecHandler_DurationReported(t *testing.T) {
 // survive the wire encoding.
 func TestExecHandler_RoundTripMarshal(t *testing.T) {
 	shell := newMockExecuter("hi\n", "warn\n", 0, nil)
-	h := newTestExecHandler(t, shell, nil, nil)
+	shell.cwd = "/"
+	h := newTestExecHandler(t, shell, []string{"/"}, nil)
 
 	env, err := h.Handle(context.Background(), "req-marshal", map[string]any{
 		"command": "echo hi",
@@ -702,7 +830,8 @@ func TestExecHandler_EndToEnd(t *testing.T) {
 	d := newTestDispatcher(t, pair.client)
 
 	// Real shell session.
-	t.Setenv("HERMES_CWD", t.TempDir())
+	shellCwd := t.TempDir()
+	t.Setenv("HERMES_CWD", shellCwd)
 	shell, err := exec.NewSession(context.Background())
 	if err != nil {
 		t.Fatalf("exec.NewSession: %v", err)
@@ -717,7 +846,7 @@ func TestExecHandler_EndToEnd(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = auditLog.Close() })
 
-	h := NewExecHandler(exec.NewSessionAdapter(shell), nil, auditLog)
+	h := NewExecHandler(exec.NewSessionAdapter(shell), []string{shellCwd}, auditLog)
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -770,7 +899,8 @@ func TestExecHandler_EndToEnd_NonZeroExit(t *testing.T) {
 	pair := newConnPair(t)
 	d := newTestDispatcher(t, pair.client)
 
-	t.Setenv("HERMES_CWD", t.TempDir())
+	shellCwd := t.TempDir()
+	t.Setenv("HERMES_CWD", shellCwd)
 	shell, err := exec.NewSession(context.Background())
 	if err != nil {
 		t.Fatalf("exec.NewSession: %v", err)
@@ -784,7 +914,7 @@ func TestExecHandler_EndToEnd_NonZeroExit(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = auditLog.Close() })
 
-	h := NewExecHandler(exec.NewSessionAdapter(shell), nil, auditLog)
+	h := NewExecHandler(exec.NewSessionAdapter(shell), []string{shellCwd}, auditLog)
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -830,6 +960,7 @@ func contains(haystack, needle string) bool {
 // to exercise the handler's deadline-exceeded branch.
 type ctxBlockingMock struct {
 	calls atomic.Int32
+	cwd   string
 }
 
 func (c *ctxBlockingMock) Run(ctx context.Context, _, _ string) (string, string, int, error) {
@@ -837,6 +968,8 @@ func (c *ctxBlockingMock) Run(ctx context.Context, _, _ string) (string, string,
 	<-ctx.Done()
 	return "", "", -1, ctx.Err()
 }
+
+func (c *ctxBlockingMock) Cwd() string { return c.cwd }
 
 // failingAuditWriter is an AuditWriter that always errors. Used
 // by the "audit failure does not fail the call" test.
@@ -852,6 +985,7 @@ func (failingAuditWriter) Write(audit.Entry) error {
 // shell returns quickly.
 type sleepingMock struct {
 	delay time.Duration
+	cwd   string
 }
 
 func (s *sleepingMock) Run(ctx context.Context, _, _ string) (string, string, int, error) {
@@ -862,3 +996,5 @@ func (s *sleepingMock) Run(ctx context.Context, _, _ string) (string, string, in
 		return "", "", -1, ctx.Err()
 	}
 }
+
+func (s *sleepingMock) Cwd() string { return s.cwd }

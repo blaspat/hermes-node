@@ -32,3 +32,11 @@ func NewSessionAdapter(s *Session) *SessionAdapter {
 func (a *SessionAdapter) Run(ctx context.Context, _, cmd string) (string, string, int, error) {
 	return a.S.Run(ctx, cmd)
 }
+
+// Cwd returns the session's current working directory. This is the
+// actual working directory of the bash process as reported by the
+// CWD marker after each Run completes (or the initial cwd before
+// the first Run).
+func (a *SessionAdapter) Cwd() string {
+	return a.S.GetCwd()
+}
