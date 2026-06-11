@@ -269,6 +269,9 @@ func (p *Pinger) markDead() {
 // supervisor's "drop reason" log. It's a small helper so the
 // reconnect loop doesn't have to know ErrHeartbeatDead's name.
 func (p *Pinger) FormatDeadError() error {
+	p.mu.Lock()
+	idle := time.Since(p.lastRecv)
+	p.mu.Unlock()
 	return fmt.Errorf("wire: %w (idle %s, threshold %s)",
-		ErrHeartbeatDead, p.opts.PongTimeout, p.opts.PongTimeout)
+		ErrHeartbeatDead, idle.Round(time.Millisecond), p.opts.PongTimeout)
 }

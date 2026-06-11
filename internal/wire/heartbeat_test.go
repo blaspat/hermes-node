@@ -11,6 +11,7 @@ package wire
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -243,5 +244,41 @@ func TestPinger_PingEnvelopeShape(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("ping wire shape missing %s in %s", want, s)
 		}
+	}
+}
+
+// TestPinger_FormatDeadError asserts the helper wraps ErrHeartbeatDead
+// and includes the idle duration and threshold in the error string.
+func TestPinger_FormatDeadError(t *testing.T) {
+	p := NewPinger(PingerOptions{
+		PingInterval: 1 * time.Hour,
+		PongTimeout:  100 * time.Millisecond,
+	})
+
+	// Start the pinger — it calls MarkAlive immediately, so lastRecv
+	// is ~now. Give it a few ms of idle time so the duration is
+	// non-zero and visible in the error message.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p.Start(ctx, func(env Envelope) {})
+
+	time.Sleep(10 * time.Millisecond)
+
+	err := p.FormatDeadError()
+	if !errors.Is(err, ErrHeartbeatDead) {
+		t.Errorf("FormatDeadError: errors.Is(%v, ErrHeartbeatDead) = false; want true", err)
+	}
+
+	s := err.Error()
+	if !strings.Contains(s, "idle ") {
+		t.Errorf("FormatDeadError message %q missing idle field", s)
+	}
+	if !strings.Contains(s, "100ms") {
+		t.Errorf("FormatDeadError message %q missing threshold %q", s, "100ms")
+	}
+	// The idle duration should be a non-zero rounded millisecond value.
+	// "0ms" would mean lastRecv was just now — unlikely after a 10ms sleep.
+	if strings.Contains(s, "idle 0ms") {
+		t.Errorf("FormatDeadError message %q has idle 0ms; want > 0 after 10ms sleep", s)
 	}
 }
