@@ -1,7 +1,7 @@
 // hermes-node is the Go binary that pairs a laptop with a remote Hermes
 // Agent brain. Two subcommands:
 //
-//	hermes-node pair --server <wss-url> --token <token> [--config <path>]
+//	hermes-node pair --server <wss-url> --token <token> [--name <name>] [--config <path>]
 //	  Write a fresh config.toml with the supplied values, mode 0600. The
 //	  operator runs this once after install; the file is the long-lived
 //	  pairing artifact (see SECURITY-REVIEW.md).
@@ -202,6 +202,7 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 	var (
 		server = fs.String("server", "", "server WSS URL (e.g. wss://vps.example.com:6969)")
 		token  = fs.String("token", "", "pairing token issued by the server")
+		name   = fs.String("name", "", "node name (must match the one registered on the server, default: config filename)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -222,10 +223,14 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 	// allowed_paths at pair time — it would make the prompt long and
 	// there's no validation we can do at this point (the paths may
 	// not exist yet on a fresh machine).
+	nodeName := *name
+	if nodeName == "" {
+		nodeName = filepath.Base(configPath) // sane default; operator edits
+	}
 	cfg := &config.Config{
 		Node: config.NodeConfig{
 			ServerURL: *server,
-			Name:      filepath.Base(configPath), // sane default; operator edits
+			Name:      nodeName,
 			Token:     *token,
 		},
 	}
