@@ -184,13 +184,21 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 	// collapses symlinks and non-existent paths into a
 	// canonical string so a "deny first" report is meaningful
 	// even when the file doesn't exist.
-	allowed, _, err := checkAllowed(fsys.Allowed, p.Path)
+	allowed, canonical, err := checkAllowed(fsys.Allowed, p.Path)
 	if err != nil || !allowed {
-		fsys.audit("read", p.Path, "error", 0)
+		auditTarget := p.Path
+		if canonical != "" && canonical != p.Path {
+			auditTarget = fmt.Sprintf("%q (resolved %q)", p.Path, canonical)
+		}
+		fsys.audit("read", auditTarget, "error", 0)
+		errDetail := fmt.Sprintf("%q is not in the configured allowlist", p.Path)
+		if canonical != "" && canonical != p.Path {
+			errDetail = fmt.Sprintf("%q is not in the configured allowlist (resolved %q)", p.Path, canonical)
+		}
 		return NewReadResultEnvelope(requestID, ReadResultPayload{
 			Status:      "error",
 			Error:       "path_not_allowed",
-			ErrorDetail: fmt.Sprintf("%q is not in the configured allowlist", p.Path),
+			ErrorDetail: errDetail,
 		}), nil
 	}
 
@@ -233,7 +241,7 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 		}), nil
 	}
 
-	fsys.audit("read", p.Path, "ok", int64(len(data)))
+	fsys.audit("read", canonical, "ok", int64(len(data)))
 	return NewReadResultEnvelope(requestID, ReadResultPayload{
 		Status:     "ok",
 		ContentB64: base64.StdEncoding.EncodeToString(data),
@@ -268,13 +276,21 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 	}
 
 	// Pre-flight allowlist. Same convention as the read path.
-	allowed, _, err := checkAllowed(fsys.Allowed, p.Path)
+	allowed, canonical, err := checkAllowed(fsys.Allowed, p.Path)
 	if err != nil || !allowed {
-		fsys.audit("write", p.Path, "error", 0)
+		auditTarget := p.Path
+		if canonical != "" && canonical != p.Path {
+			auditTarget = fmt.Sprintf("%q (resolved %q)", p.Path, canonical)
+		}
+		fsys.audit("write", auditTarget, "error", 0)
+		errDetail := fmt.Sprintf("%q is not in the configured allowlist", p.Path)
+		if canonical != "" && canonical != p.Path {
+			errDetail = fmt.Sprintf("%q is not in the configured allowlist (resolved %q)", p.Path, canonical)
+		}
 		return NewWriteResultEnvelope(requestID, WriteResultPayload{
 			Status:      "error",
 			Error:       "path_not_allowed",
-			ErrorDetail: fmt.Sprintf("%q is not in the configured allowlist", p.Path),
+			ErrorDetail: errDetail,
 		}), nil
 	}
 
@@ -350,7 +366,7 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 		}), nil
 	}
 
-	fsys.audit("write", p.Path, "ok", int64(n))
+	fsys.audit("write", canonical, "ok", int64(n))
 	return NewWriteResultEnvelope(requestID, WriteResultPayload{
 		Status:       "ok",
 		BytesWritten: int64(n),
@@ -358,7 +374,7 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 }
 
 // checkAllowed is a thin wrapper around fs.Check that returns
-// (false, "", fs.ErrNotAllowed) when the allowed list is nil/empty
+// (false, path, fs.ErrNotAllowed) when the allowed list is nil/empty
 // (deny-by-default). Operators who want wide-open access must
 // configure an explicit root, e.g. allowed_paths = ["/"].
 func checkAllowed(allowed []string, path string) (bool, string, error) {
