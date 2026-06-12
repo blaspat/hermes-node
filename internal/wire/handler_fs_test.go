@@ -7,10 +7,7 @@
 //
 // We use realOS + t.TempDir() throughout. An in-memory FileIO
 // would be nice for hermetic tests, but internal/fs.Check walks
-// the host filesystem during its canonicalize step, so the
-// in-memory layer can't satisfy it. (A follow-up issue tracks
-// the canonicalize bug; once that's fixed, the in-memory layer
-// becomes viable.)
+// the host filesystem during its canonicalize step.
 //
 // One subtest per concern keeps failures easy to read.
 package wire
@@ -33,9 +30,7 @@ import (
 //
 // We use realOS + t.TempDir() rather than the in-memory
 // recordingFileIO because the path check (internal/fs.Check)
-// walks the host filesystem; the in-memory layer can't
-// satisfy that surface (and would also mask the canonicalize
-// bug filed in the follow-up issue).
+// walks the host filesystem.
 func TestReadHandler_HappyPath(t *testing.T) {
 	dir := t.TempDir()
 	const fname = "note.txt"
