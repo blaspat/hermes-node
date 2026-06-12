@@ -137,21 +137,17 @@ func TestRun_PairSubcommand_WritesConfig(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.toml")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"pair", "--server", "wss://vps.example.com:6969", "--token", "secret-token", "--config", cfgPath}, &stdout, &stderr)
+	code := run([]string{"pair", "--server", "wss://vps.example.com:6969", "--token", "secret-token", "--name", "workmac", "--config", cfgPath}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run returned %d; stderr:\n%s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "paired") {
 		t.Errorf("stdout should mention 'paired'; got %q", stdout.String())
 	}
-	// The pair stdout message (W3 + S5) must warn that the
-	// default [node].name is unusable and that an empty
+	// The pair stdout message (S5) must warn that an empty
 	// [node].allowed_paths will reject all calls. Operators
 	// who don't see this and then run the service will hit
-	// silent auth failures or no-op handlers.
-	if !strings.Contains(stdout.String(), "auth_err/invalid_token") {
-		t.Errorf("pair stdout should warn that the default [node].name triggers auth_err/invalid_token; got %q", stdout.String())
-	}
+	// no-op handlers.
 	if !strings.Contains(stdout.String(), "[node].allowed_paths") {
 		t.Errorf("pair stdout should mention [node].allowed_paths; got %q", stdout.String())
 	}
@@ -176,6 +172,9 @@ func TestRun_PairSubcommand_WritesConfig(t *testing.T) {
 	if cfg.Node.Token != "secret-token" {
 		t.Errorf("token = %q, want secret-token", cfg.Node.Token)
 	}
+	if cfg.Node.Name != "workmac" {
+		t.Errorf("name = %q, want workmac", cfg.Node.Name)
+	}
 }
 
 func TestRun_PairRefusesOverwrite(t *testing.T) {
@@ -183,13 +182,13 @@ func TestRun_PairRefusesOverwrite(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.toml")
 
 	// First pair: should succeed.
-	if code := run([]string{"pair", "--server", "wss://x", "--token", "t", "--config", cfgPath}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
+	if code := run([]string{"pair", "--server", "wss://x", "--token", "t", "--name", "test", "--config", cfgPath}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
 		t.Fatalf("first pair: exit %d", code)
 	}
 
 	// Second pair: should fail.
 	var stderr bytes.Buffer
-	code := run([]string{"pair", "--server", "wss://x", "--token", "t", "--config", cfgPath}, &bytes.Buffer{}, &stderr)
+	code := run([]string{"pair", "--server", "wss://x", "--token", "t", "--name", "test", "--config", cfgPath}, &bytes.Buffer{}, &stderr)
 	if code == 0 {
 		t.Errorf("second pair: exit 0; want non-zero (refuse to overwrite)")
 	}
