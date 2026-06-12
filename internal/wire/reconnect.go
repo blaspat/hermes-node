@@ -341,12 +341,13 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		return fmt.Errorf("%w: %w", errFatal, ctx.Err())
 	}
 
-	// Heartbeat watchdog fired. Surface a clean error so the
-	// audit log shows the reason distinctly from a transport
-	// error.
+	// Heartbeat watchdog fired. The pinger helper wraps ErrHeartbeatDead
+	// with the idle-duration detail. The outer %w preserves the wrapped
+	// chain so errors.Is(returnedErr, ErrHeartbeatDead) works through
+	// both layers.
 	if pinger.IsDead() {
 		return fmt.Errorf("wire: connection lost on attempt %d: %w",
-			s.attempt, ErrHeartbeatDead)
+			s.attempt, pinger.FormatDeadError())
 	}
 
 	// Transport error or graceful bye. Both are retryable.
