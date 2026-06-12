@@ -389,8 +389,8 @@ func checkAllowed(allowed []string, path string) (bool, string, error) {
 // report 0 to keep the field consistent with the exec handler's
 // "0 = no timing measured" sentinel. The bytes argument is recorded
 // inline in Target as `path (N bytes)` so a postmortem grep can
-// surface the row even though the audit schema doesn't carry a
-// separate size column in v0.1.
+// surface the row even when the event was a zero-byte write
+// (which may signal tampering or a config reset).
 func (fsys *FileSystem) audit(action, target, status string, bytes int64) {
 	if fsys.AuditLog == nil {
 		return
@@ -398,13 +398,10 @@ func (fsys *FileSystem) audit(action, target, status string, bytes int64) {
 	row := audit.Entry{
 		TS:         fsys.now(),
 		Action:     action,
-		Target:     target,
+		Target:     fmt.Sprintf("%s (%d bytes)", target, bytes),
 		DurationMs: 0,
 		ExitCode:   0,
 		Status:     status,
-	}
-	if bytes > 0 {
-		row.Target = fmt.Sprintf("%s (%d bytes)", target, bytes)
 	}
 	_ = fsys.AuditLog.Write(row)
 }
