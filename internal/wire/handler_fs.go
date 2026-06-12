@@ -137,9 +137,7 @@ type FileSystem struct {
 	now func() time.Time
 }
 
-// NewFileSystem returns a FileSystem wired with realOS. Tests
-// typically use NewFileSystemWithIO instead so they can pass a
-// recordingFileIO.
+// NewFileSystem returns a FileSystem wired with realOS.
 func NewFileSystem(allowed []string, auditLog AuditWriter) *FileSystem {
 	return &FileSystem{
 		IO:       realOS{},
@@ -149,22 +147,12 @@ func NewFileSystem(allowed []string, auditLog AuditWriter) *FileSystem {
 	}
 }
 
-// NewFileSystemWithIO is the test seam for the FileSystem
-// dependency.
-func NewFileSystemWithIO(io FileIO, allowed []string, auditLog AuditWriter) *FileSystem {
-	return &FileSystem{
-		IO:       io,
-		Allowed:  allowed,
-		AuditLog: auditLog,
-		now:      time.Now,
-	}
-}
-
-// ReadHandler is the wire.Handler entry point for `read` calls. It
-// is safe to register on a Dispatcher as TypeRead -> h.Handle.
+// WireHandler adapts a typed handler function (e.g. ReadHandler)
+// to the generic Dispatcher callback signature.
 func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, payload map[string]any) (Envelope, error) {
 	var p ReadPayload
 	if err := reMarshalInto(payload, &p); err != nil {
+		fsys.audit("read", "", "rejected", 0)
 		return NewErrorEnvelope(requestID, ErrorPayload{
 			Code:   5000,
 			Reason: "internal_error",
@@ -172,6 +160,7 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 		}), nil
 	}
 	if p.Path == "" {
+		fsys.audit("read", "", "rejected", 0)
 		return NewErrorEnvelope(requestID, ErrorPayload{
 			Code:   4000,
 			Reason: "bad_request",
@@ -208,14 +197,14 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 	info, err := fsys.IO.Stat(p.Path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			fsys.audit("read", p.Path, "error", 0)
+			fsys.audit("read", canonical, "error", 0)
 			return NewReadResultEnvelope(requestID, ReadResultPayload{
 				Status:      "error",
 				Error:       "file_not_found",
-				ErrorDetail: fmt.Sprintf("%q does not exist", p.Path),
+				ErrorDetail: fmt.Sprintf("%q does not exist", canonical),
 			}), nil
 		}
-		fsys.audit("read", p.Path, "error", 0)
+		fsys.audit("read", canonical, "error", 0)
 		return NewReadResultEnvelope(requestID, ReadResultPayload{
 			Status:      "error",
 			Error:       "io_error",
@@ -223,17 +212,17 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 		}), nil
 	}
 	if info.Size() > MaxFileBytes {
-		fsys.audit("read", p.Path, "error", 0)
+		fsys.audit("read", canonical, "error", 0)
 		return NewReadResultEnvelope(requestID, ReadResultPayload{
 			Status:      "error",
 			Error:       "file_too_large",
-			ErrorDetail: fmt.Sprintf("%q is %d bytes; cap is %d", p.Path, info.Size(), MaxFileBytes),
+			ErrorDetail: fmt.Sprintf("%q is %d bytes; cap is %d", canonical, info.Size(), MaxFileBytes),
 		}), nil
 	}
 
 	data, err := fsys.IO.ReadFile(p.Path)
 	if err != nil {
-		fsys.audit("read", p.Path, "error", 0)
+		fsys.audit("read", canonical, "error", 0)
 		return NewReadResultEnvelope(requestID, ReadResultPayload{
 			Status:      "error",
 			Error:       "io_error",
@@ -254,6 +243,7 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payload map[string]any) (Envelope, error) {
 	var p WritePayload
 	if err := reMarshalInto(payload, &p); err != nil {
+		fsys.audit("write", "", "rejected", 0)
 		return NewErrorEnvelope(requestID, ErrorPayload{
 			Code:   5000,
 			Reason: "internal_error",
@@ -261,6 +251,7 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 		}), nil
 	}
 	if p.Path == "" {
+		fsys.audit("write", "", "rejected", 0)
 		return NewErrorEnvelope(requestID, ErrorPayload{
 			Code:   4000,
 			Reason: "bad_request",
@@ -268,6 +259,7 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 		}), nil
 	}
 	if p.ContentB64 == "" {
+		fsys.audit("write", "", "rejected", 0)
 		return NewErrorEnvelope(requestID, ErrorPayload{
 			Code:   4000,
 			Reason: "bad_request",
@@ -299,7 +291,7 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 	// (base64 expansion is ~4/3).
 	data, err := base64.StdEncoding.DecodeString(p.ContentB64)
 	if err != nil {
-		fsys.audit("write", p.Path, "error", 0)
+		fsys.audit("write", canonical, "error", 0)
 		return NewWriteResultEnvelope(requestID, WriteResultPayload{
 			Status:      "error",
 			Error:       "io_error",
@@ -307,7 +299,7 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 		}), nil
 	}
 	if int64(len(data)) > MaxFileBytes {
-		fsys.audit("write", p.Path, "error", 0)
+		fsys.audit("write", canonical, "error", 0)
 		return NewWriteResultEnvelope(requestID, WriteResultPayload{
 			Status:      "error",
 			Error:       "file_too_large",
@@ -328,7 +320,7 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 	case "append":
 		mode = WriteAppend
 	default:
-		fsys.audit("write", p.Path, "error", 0)
+		fsys.audit("write", canonical, "error", 0)
 		return NewWriteResultEnvelope(requestID, WriteResultPayload{
 			Status:      "error",
 			Error:       "io_error",
@@ -347,7 +339,7 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 	const filePerm os.FileMode = 0o644
 	n, err := fsys.IO.WriteFile(p.Path, data, filePerm, mode)
 	if err != nil {
-		fsys.audit("write", p.Path, "error", 0)
+		fsys.audit("write", canonical, "error", int64(0))
 		errCode := "io_error"
 		errDetail := fmt.Sprintf("write: %v", err)
 		if mode == WriteCreate && errors.Is(err, fs.ErrExist) {
@@ -356,7 +348,7 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 			// dedicated code for this; io_error with a
 			// clear detail is the honest report.
 			errCode = "io_error"
-			errDetail = fmt.Sprintf("create refused: %q already exists", p.Path)
+			errDetail = fmt.Sprintf("create refused: %q already exists", canonical)
 		}
 		return NewWriteResultEnvelope(requestID, WriteResultPayload{
 			Status:       "error",

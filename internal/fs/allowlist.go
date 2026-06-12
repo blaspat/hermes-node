@@ -94,9 +94,9 @@ func canonicalize(path string) (string, error) {
 		r, perr := filepath.EvalSymlinks(parent)
 		if perr == nil {
 			if tail == "" {
-				return r, nil
+				return filepath.Join(r, filepath.Base(cur)), nil
 			}
-			return filepath.Join(r, tail), nil
+			return filepath.Join(r, filepath.Base(cur), tail), nil
 		}
 		if !errors.Is(perr, os.ErrNotExist) {
 			return "", perr
