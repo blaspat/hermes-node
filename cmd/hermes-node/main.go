@@ -1,7 +1,7 @@
 // hermes-node is the Go binary that pairs a laptop with a remote Hermes
 // Agent brain. Two subcommands:
 //
-//	hermes-node pair --server <wss-url> --token <token> [--config <path>]
+//	hermes-node pair --server <wss-url> --token <token> [--name <name>] [--config <path>]
 //	  Write a fresh config.toml with the supplied values, mode 0600. The
 //	  operator runs this once after install; the file is the long-lived
 //	  pairing artifact (see SECURITY-REVIEW.md).
@@ -202,6 +202,7 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 	var (
 		server = fs.String("server", "", "server WSS URL (e.g. wss://vps.example.com:6969)")
 		token  = fs.String("token", "", "pairing token issued by the server")
+		name   = fs.String("name", "", "node name (required — must match the one registered on the server)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -214,6 +215,10 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hermes-node pair: --token is required")
 		return 2
 	}
+	if *name == "" {
+		fmt.Fprintln(stderr, "hermes-node pair: --name is required")
+		return 2
+	}
 
 	// The pair subcommand writes a minimal config. allowed_paths and
 	// log_path stay at their operator-edited defaults (empty / default);
@@ -222,10 +227,11 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 	// allowed_paths at pair time — it would make the prompt long and
 	// there's no validation we can do at this point (the paths may
 	// not exist yet on a fresh machine).
+	nodeName := *name
 	cfg := &config.Config{
 		Node: config.NodeConfig{
 			ServerURL: *server,
-			Name:      filepath.Base(configPath), // sane default; operator edits
+			Name:      nodeName,
 			Token:     *token,
 		},
 	}
@@ -236,11 +242,6 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "hermes-node: paired. Config written to %s (mode 0600).\n", configPath)
 	fmt.Fprintf(stdout, "\n")
 	fmt.Fprintf(stdout, "  Before starting the service, edit %s to set:\n", configPath)
-	fmt.Fprintf(stdout, "    [node].name           — must match the name the server issued the token for.\n")
-	fmt.Fprintf(stdout, "                           The default here is the filename; the server will\n")
-	fmt.Fprintf(stdout, "                           reject mismatched names with auth_err/invalid_token\n")
-	fmt.Fprintf(stdout, "                           (PROTOCOL.md §3.4 / §3.5) and the node will silently\n")
-	fmt.Fprintf(stdout, "                           fail to authenticate.\n")
 	fmt.Fprintf(stdout, "    [node].allowed_paths  — list of filesystem roots exec/read/write can touch.\n")
 	fmt.Fprintf(stdout, "                           Empty list (the default) means every path is\n")
 	fmt.Fprintf(stdout, "                           rejected by the handlers. See SECURITY-REVIEW.md.\n")
