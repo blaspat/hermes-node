@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -627,4 +628,120 @@ func entryStatuses(entries []audit.Entry) []string {
 		out[i] = e.Status
 	}
 	return out
+}
+
+// TestReadHandler_PathWithDotDot_ShowsCanonicalInAudit asserts that
+// when a path with ".." is rejected by the allowlist, the audit
+// target includes both the raw path and the resolved canonical.
+// e.g. `"somedir/../outside/secret.txt (resolved /tmp/real/secret.txt)"`.
+func TestReadHandler_PathWithDotDot_ShowsCanonicalInAudit(t *testing.T) {
+	allowedDir := t.TempDir()
+	deniedDir := t.TempDir()
+	deniedFile := filepath.Join(deniedDir, "secret.txt")
+	if err := os.WriteFile(deniedFile, []byte("top secret"), 0o644); err != nil {
+		t.Fatalf("seed denied file: %v", err)
+	}
+
+	// Raw path uses .. to reach a directory outside the allowlist.
+	// We construct it manually (not via filepath.Join which cleans ..)
+	// so the raw path preserves the ".." segment for the canonical
+	// resolution test.
+	rawPath := allowedDir + "/../" + filepath.Base(deniedDir) + "/secret.txt"
+	const resolvedMarker = "(resolved"
+
+	pair := newConnPair(t)
+	d := newTestDispatcher(t, pair.client)
+	rec := &recordingAudit{}
+	fsys := NewFileSystem([]string{allowedDir}, rec)
+	if err := d.Register(TypeRead, fsys.ReadHandler); err != nil {
+		t.Fatalf("Register read: %v", err)
+	}
+	_, _ = runDispatcher(t, d)
+
+	writeServerJSON(t, pair.server, map[string]any{
+		"id":   "req-canonical-deny",
+		"type": "read",
+		"path": rawPath,
+	})
+	resp := readEnvelope(t, pair)
+
+	if resp["status"] != "error" {
+		t.Errorf("response status: got %q, want error", resp["status"])
+	}
+	if resp["error"] != "path_not_allowed" {
+		t.Errorf("response error: got %q, want path_not_allowed", resp["error"])
+	}
+
+	// Audit target should show the raw path and the resolved canonical.
+	entries := rec.snapshot()
+	if len(entries) != 1 {
+		t.Fatalf("audit entries: got %d, want 1", len(entries))
+	}
+	if !strings.Contains(entries[0].Target, rawPath) {
+		t.Errorf("audit target %q missing raw path %q", entries[0].Target, rawPath)
+	}
+	if !strings.Contains(entries[0].Target, resolvedMarker) {
+		t.Errorf("audit target %q missing %q", entries[0].Target, resolvedMarker)
+	}
+
+	// Error detail should contain the resolved canonical.
+	if detail, _ := resp["error_detail"].(string); !strings.Contains(detail, deniedFile) {
+		t.Errorf("error_detail %q missing resolved path %q", detail, deniedFile)
+	}
+	if !strings.Contains(resp["error_detail"].(string), resolvedMarker) {
+		t.Errorf("error_detail %q missing %q", resp["error_detail"], resolvedMarker)
+	}
+}
+
+// TestReadHandler_Symlink_ShowsCanonicalInSuccessAudit asserts that
+// a read through a symlink records the resolved (canonical) path in
+// the audit target, not the symlink path.
+func TestReadHandler_Symlink_ShowsCanonicalInSuccessAudit(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a real file.
+	realFile := filepath.Join(dir, "real.txt")
+	const content = "hello\n"
+	if err := os.WriteFile(realFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Create a relative symlink inside the same directory.
+	linkPath := filepath.Join(dir, "link.txt")
+	if err := os.Symlink("real.txt", linkPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	pair := newConnPair(t)
+	d := newTestDispatcher(t, pair.client)
+	rec := &recordingAudit{}
+	fsys := NewFileSystem([]string{dir}, rec)
+	if err := d.Register(TypeRead, fsys.ReadHandler); err != nil {
+		t.Fatalf("Register read: %v", err)
+	}
+	_, _ = runDispatcher(t, d)
+
+	// Read through the symlink.
+	writeServerJSON(t, pair.server, map[string]any{
+		"id":   "req-read-symlink",
+		"type": "read",
+		"path": linkPath,
+	})
+	resp := readEnvelope(t, pair)
+
+	if resp["status"] != "ok" {
+		t.Fatalf("response status: got %q, want ok (detail=%v)", resp["status"], resp["error_detail"])
+	}
+
+	// Audit target should reference the resolved file, not the symlink.
+	entries := rec.snapshot()
+	if len(entries) != 1 {
+		t.Fatalf("audit entries: got %d, want 1", len(entries))
+	}
+	if !strings.Contains(entries[0].Target, "real.txt") {
+		t.Errorf("audit target %q missing resolved file name", entries[0].Target)
+	}
+	if strings.Contains(entries[0].Target, "link.txt") {
+		t.Errorf("audit target %q should not contain symlink name, got %q", entries[0].Target, entries[0].Target)
+	}
 }
