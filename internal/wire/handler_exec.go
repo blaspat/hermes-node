@@ -122,6 +122,12 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 		// Malformed payload is a client/protocol bug. Surface as
 		// an error envelope so the server can log the exact
 		// shape that broke us.
+		h.auditExec(p, audit.Entry{
+			TS:     h.now(),
+			Action: "exec",
+			Target: "",
+			Status: "rejected",
+		})
 		return NewErrorEnvelope(requestID, ErrorPayload{
 			Code:   5000,
 			Reason: "internal_error",
@@ -129,6 +135,12 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 		}), nil
 	}
 	if p.Command == "" {
+		h.auditExec(p, audit.Entry{
+			TS:     h.now(),
+			Action: "exec",
+			Target: p.Cwd,
+			Status: "rejected",
+		})
 		return NewErrorEnvelope(requestID, ErrorPayload{
 			Code:   4000,
 			Reason: "bad_request",
@@ -166,9 +178,9 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	if cwd == "" {
 		cwd = h.Shell.Cwd()
 	}
-	ok, _, err := fs.Check(h.Allowed, cwd)
+	ok, canonical, err := fs.Check(h.Allowed, cwd)
 	if err != nil || !ok {
-		auditTarget := cwd
+		auditTarget := canonical
 		if auditTarget == "" {
 			auditTarget = p.Command
 		}
@@ -233,8 +245,8 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// already ran, the operator can re-derive the row from the
 	// exec_result.
 	target := p.Command
-	if cwd != "" {
-		target = cwd + " :: " + p.Command
+	if canonical != "" {
+		target = canonical + " :: " + p.Command
 	}
 	entry := audit.Entry{
 		TS:         start,

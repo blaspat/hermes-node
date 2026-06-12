@@ -124,23 +124,41 @@ func TestCheck_SymlinkEscapeViaNestedPath(t *testing.T) {
 }
 
 func TestCheck_NonexistentTargetInsideRoot(t *testing.T) {
-	// Write paths: the file doesn't exist yet, but the directory does.
-	// The check should still allow it (we resolve the nearest existing
-	// ancestor and join the rest back on).
+	// Write paths: the file doesn't exist yet, but the parent
+	// directory does. The check should still allow it (we resolve
+	// the nearest existing ancestor and join the rest back on).
 	root := t.TempDir()
-	missing := filepath.Join(root, "newdir", "newfile.txt")
+	deep := filepath.Join(root, "a", "b", "newfile.txt")
+	shallow := filepath.Join(root, "newfile.txt")
 
-	allowed, canonical, err := Check([]string{root}, missing)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !allowed {
-		t.Fatalf("expected allowed=true for non-existent path under root")
-	}
-	// Canonical should still report the root as its prefix even though
-	// the leaf doesn't exist.
-	if filepath.Dir(canonical) == "" {
-		t.Fatalf("canonical = %q, expected a resolved prefix", canonical)
+	for _, tc := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "single-level-leaf-missing",
+			path: shallow,
+			want: shallow,
+		},
+		{
+			name: "multi-level-parents-missing",
+			path: deep,
+			want: deep,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			allowed, canonical, err := Check([]string{root}, tc.path)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !allowed {
+				t.Fatalf("expected allowed=true for non-existent path under root")
+			}
+			if canonical != tc.want {
+				t.Errorf("canonical = %q, want %q", canonical, tc.want)
+			}
+		})
 	}
 }
 
