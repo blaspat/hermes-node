@@ -202,7 +202,7 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 	var (
 		server = fs.String("server", "", "server WSS URL (e.g. wss://vps.example.com:6969)")
 		token  = fs.String("token", "", "pairing token issued by the server")
-		name   = fs.String("name", "", "node name (required — must match the one registered on the server)")
+		name   = fs.String("name", "", "node name (must match the one registered on the server, default: config filename)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -215,10 +215,6 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hermes-node pair: --token is required")
 		return 2
 	}
-	if *name == "" {
-		fmt.Fprintln(stderr, "hermes-node pair: --name is required")
-		return 2
-	}
 
 	// The pair subcommand writes a minimal config. allowed_paths and
 	// log_path stay at their operator-edited defaults (empty / default);
@@ -228,6 +224,9 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 	// there's no validation we can do at this point (the paths may
 	// not exist yet on a fresh machine).
 	nodeName := *name
+	if nodeName == "" {
+		nodeName = filepath.Base(configPath) // sane default; operator edits
+	}
 	cfg := &config.Config{
 		Node: config.NodeConfig{
 			ServerURL: *server,
