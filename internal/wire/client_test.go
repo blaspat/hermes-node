@@ -19,6 +19,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -322,4 +323,61 @@ func TestEnvelope_RoundTrip(t *testing.T) {
 // reach unexported names; this helper keeps the call site readable.
 func codecMarshal(e Envelope) ([]byte, error) {
 	return e.MarshalJSON()
+}
+
+func TestNormaliseServerURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantPath string
+	}{
+		{
+			name:     "bare host:port — no path",
+			input:    "wss://vps.example.com:7000",
+			wantPath: "/ws/nodes",
+		},
+		{
+			name:     "bare host:port with slash only",
+			input:    "wss://vps.example.com:7000/",
+			wantPath: "/ws/nodes",
+		},
+		{
+			name:     "already has /ws/nodes",
+			input:    "wss://vps.example.com:7000/ws/nodes",
+			wantPath: "/ws/nodes",
+		},
+		{
+			name:     "has sub-path",
+			input:    "wss://vps.example.com:7000/some/path",
+			wantPath: "/some/path",
+		},
+		{
+			name:     "invalid URL — Go parses it as relative; no path normalised",
+			input:    "not-a-url",
+			wantPath: "not-a-url",
+		},
+		{
+			name:     "ws scheme",
+			input:    "ws://127.0.0.1:7000",
+			wantPath: "/ws/nodes",
+		},
+		{
+			name:     "localhost",
+			input:    "wss://localhost:7000",
+			wantPath: "/ws/nodes",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normaliseServerURL(tc.input)
+			u, err := url.Parse(got)
+			if err != nil {
+				t.Fatalf("url.Parse(%q): %v", got, err)
+			}
+			if u.Path != tc.wantPath {
+				t.Errorf("url.Parse(%q).Path: got %q, want %q", got, u.Path, tc.wantPath)
+			}
+		})
+	}
 }

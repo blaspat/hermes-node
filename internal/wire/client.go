@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -141,6 +142,12 @@ func (c *Client) NodeName() string { return c.nodeName }
 // returns successfully, the caller owns the connection's lifecycle.
 func Connect(ctx context.Context, opts DialOptions) (*Client, error) {
 	opts = opts.withDefaults()
+
+	// Normalise ServerURL: append /ws/nodes if the user omitted it.
+	// This lets operators pass just "wss://host:port" without the path,
+	// which is the natural mistake given the Python CLI prints "<host:port>"
+	// in its pair instructions.
+	opts.ServerURL = normaliseServerURL(opts.ServerURL)
 
 	wsCtx, cancel := context.WithTimeout(ctx, opts.HandshakeTimeout)
 	defer cancel()
@@ -293,4 +300,19 @@ func deadlineFromCtx(ctx context.Context, timeout time.Duration) time.Time {
 		return dl
 	}
 	return t
+}
+
+// normaliseServerURL appends /ws/nodes if the given URL has no path component.
+// This lets operators pass "wss://host:port" and have it Just Work, without
+// having to know the server's internal routing path.
+func normaliseServerURL(serverURL string) string {
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		// Invalid URL — leave it unchanged so the dial error is informative
+		return serverURL
+	}
+	if u.Path == "" || u.Path == "/" {
+		u.Path = "/ws/nodes"
+	}
+	return u.String()
 }
