@@ -45,11 +45,16 @@ var ErrHandshakeTimeout = errors.New("wire: handshake timed out")
 // response to auth).
 var ErrUnexpectedMessage = errors.New("wire: unexpected message during handshake")
 
+// defaultWSPath is the wire server's WebSocket path.  Operators may omit
+// it when configuring a node and normaliseServerURL will append it.
+const defaultWSPath = "/ws/nodes"
+
 // DialOptions configures one Connect call. The defaults are fine for
 // production; the test server overrides HandshakeTimeout so the suite
 // can run fast.
 type DialOptions struct {
 	// ServerURL is the WSS endpoint, e.g. wss://hermes.example.com/ws/nodes.
+	// If the path is omitted normaliseServerURL appends defaultWSPath.
 	ServerURL string
 
 	// NodeName / Token identify the node to the server (PROTOCOL.md
@@ -312,7 +317,7 @@ func normaliseServerURL(serverURL string) string {
 		return serverURL
 	}
 	if u.Path == "" || u.Path == "/" {
-		u.Path = "/ws/nodes"
+		u.Path = defaultWSPath
 	}
 	return u.String()
 }
