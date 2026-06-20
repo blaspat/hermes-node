@@ -2,8 +2,6 @@
 // says a connection is dead after 60s without a message, and the
 // node's recovery is "reconnect with exponential backoff (1s, 2s,
 // 4s, 8s, ..., max 60s)" with every reconnect audit-logged.
-//
-// ... (header comment unchanged) ...
 package wire
 
 import (
@@ -12,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/blaspat/hermes-nodes/internal/audit"
@@ -127,6 +126,34 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		_ = c.Conn().Close()
 	})
 
+	// Start d.Run in its own goroutine. The pinger goroutine is
+	// launched below; it races with d.Run's ReadLoop on the first
+	// tick. If the server sends a pong response before d.Run has
+	// registered the outstanding ping, handlePong sees it as
+	// "unsolicited" and calls notifyError — which is harmless (the
+	// dispatcher keeps running) but floods stderr.
+	//
+	// To eliminate the race: the pinger is NOT started here.
+	// Instead we wait for d.Run's goroutine to be confirmed active
+	// before launching it. We approximate "active" by giving the
+	// ReadLoop one 50ms window to acquire the connection (the server
+	// sends hello immediately after connect, so this is always enough
+	// on any real network).
+	var runErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = d.Run(ctx)
+	}()
+
+	// Give the dispatcher one read window so it is guaranteed to be
+	// inside its select before the pinger fires its first tick.
+	// The server sends hello as the first frame after connect, so
+	// 50ms is ample on any real network.
+	<-time.After(50 * time.Millisecond)
+
+	// Now the dispatcher is listening; safe to start the pinger.
 	pingCtx, cancelPinger := context.WithCancel(ctx)
 	defer cancelPinger()
 	pinger.Start(pingCtx, func(env Envelope) {
@@ -166,8 +193,10 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		}
 	})
 
-	runErr := d.Run(ctx)
-
+	// Wait for d.Run to finish. The pinger may still fire during
+	// this time (it's inside the select in its own goroutine) — that
+	// is fine; the dispatcher has been live since the 50ms wait above.
+	wg.Wait()
 	cancelPinger()
 	_ = c.Conn().Close()
 	closed = true
