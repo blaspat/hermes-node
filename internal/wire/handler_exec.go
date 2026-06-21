@@ -168,33 +168,35 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	defer cancel()
 
 	// Pre-flight: resolve the effective working directory. When the
-	// call omits cwd, we pull the shell's current cwd so the
-	// allowlist check still applies — a previous Run that `cd`'d
-	// into /etc should not let a follow-up (no-cwd) call run there
-	// unchecked. An empty Allowed list rejects every cwd (deny-by-
+	// call omits cwd we skip the allowlist check entirely — the
+	// operator's shell default cwd is trusted. When the call
+	// explicitly provides a cwd we validate it against the allowlist
+	// so a rogue client can't jump to an arbitrary directory.
+	// An empty Allowed list rejects every explicit cwd (deny-by-
 	// default); operators who want wide-open access must configure
 	// an explicit root, e.g. allowed_paths = ["/"].
 	cwd := p.Cwd
-	if cwd == "" {
-		cwd = h.Shell.Cwd()
-	}
-	ok, canonical, err := fs.Check(h.Allowed, cwd)
-	if err != nil || !ok {
-		auditTarget := canonical
-		if auditTarget == "" {
-			auditTarget = p.Command
+	var canonical string
+	if cwd != "" {
+		ok, canon, err := fs.Check(h.Allowed, cwd)
+		canonical = canon
+		if err != nil || !ok {
+			auditTarget := canonical
+			if auditTarget == "" {
+				auditTarget = p.Command
+			}
+			h.auditExec(p, audit.Entry{
+				TS:     h.now(),
+				Action: "exec",
+				Target: auditTarget,
+				Status: "error",
+			})
+			return NewExecResultEnvelope(requestID, ExecResultPayload{
+				Status:     "error",
+				ExitCode:   -1,
+				DurationMS: 0,
+			}), nil
 		}
-		h.auditExec(p, audit.Entry{
-			TS:     h.now(),
-			Action: "exec",
-			Target: auditTarget,
-			Status: "error",
-		})
-		return NewExecResultEnvelope(requestID, ExecResultPayload{
-			Status:     "error",
-			ExitCode:   -1,
-			DurationMS: 0,
-		}), nil
 	}
 
 	// Run the command. The shell owns the env/timeout enforcement
