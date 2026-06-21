@@ -279,12 +279,17 @@ func (d *Dispatcher) handleReserved(ctx context.Context, env Envelope) (*Envelop
 		return &pong, true, false, nil
 
 	case TypePong:
-		// We don't send pings from this loop (Task 1.9 owns
-		// the heartbeat), so an unsolicited pong is a
-		// protocol-level surprise. We log and continue
-		// rather than tearing down the connection \u2014 the
-		// server may simply have raced us.
-		d.notifyError(fmt.Errorf("wire: unsolicited pong (no active ping)"), env)
+		// An unsolicited pong is not a protocol error — it means we
+		// received a pong with no matching in-flight ping. This can
+		// happen when:
+		//  - the server sent a ping we already responded to, and the
+		//    response/pong crossed paths on the wire; or
+		//  - the pinger just started and the server's first ping
+		//    arrived before our first pong was registered.
+		// We do NOT treat this as a dispatch error. The comment above
+		// was misleading: "notifyError" fires OnError (goroutine dump +
+		// audit log) which is alarming but harmless. This case must
+		// never trigger OnError — the node is fine.
 		return nil, true, false, nil
 
 	case TypeBye:

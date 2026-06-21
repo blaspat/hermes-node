@@ -2,8 +2,6 @@
 // says a connection is dead after 60s without a message, and the
 // node's recovery is "reconnect with exponential backoff (1s, 2s,
 // 4s, 8s, ..., max 60s)" with every reconnect audit-logged.
-//
-// ... (header comment unchanged) ...
 package wire
 
 import (
