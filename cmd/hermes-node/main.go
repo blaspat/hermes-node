@@ -694,9 +694,13 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				continue
 			}
 			// Apply log level change at runtime.
-			newLevel, _ := logger.ParseLevel(reloaded.Node.LogLevel)
-			log.SetLevel(newLevel)
-			log.Info("SIGHUP: config reloaded (log_level=%s)", reloaded.Node.LogLevel)
+			newLevel, ok := logger.ParseLevel(reloaded.Node.LogLevel)
+			if !ok {
+				log.Warn("SIGHUP: unknown log_level %q, keeping current level", reloaded.Node.LogLevel)
+			} else {
+				log.SetLevel(newLevel)
+				log.Info("SIGHUP: config reloaded (log_level=%s)", reloaded.Node.LogLevel)
+			}
 		}
 	}()
 
