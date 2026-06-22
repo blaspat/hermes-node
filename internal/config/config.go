@@ -33,6 +33,7 @@ type NodeConfig struct {
 	Token        string   `toml:"token"`
 	AllowedPaths []string `toml:"allowed_paths"`
 	LogPath      string   `toml:"log_path"`
+	LogLevel     string   `toml:"log_level"`
 }
 
 // ServerConfig describes how the node should validate the server's TLS cert.
@@ -73,6 +74,10 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("config: %w", err)
 		}
 		cfg.Node.LogPath = defaultPath
+	}
+
+	if cfg.Node.LogLevel == "" {
+		cfg.Node.LogLevel = "info"
 	}
 
 	return &cfg, nil

@@ -32,6 +32,7 @@ import (
 	"github.com/blaspat/hermes-nodes/internal/audit"
 	"github.com/blaspat/hermes-nodes/internal/config"
 	execer "github.com/blaspat/hermes-nodes/internal/exec"
+	"github.com/blaspat/hermes-nodes/internal/logger"
 	"github.com/blaspat/hermes-nodes/internal/wire"
 )
 
@@ -265,18 +266,21 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 		return 1
 	}
 
+	logLevel, _ := logger.ParseLevel(cfg.Node.LogLevel)
+	log := logger.NewWithWriters(logLevel, stdout, stderr)
+
 	auditLog, err := audit.New(cfg.Node.LogPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "hermes-node: open audit log: %v\n", err)
+		log.Error("open audit log: %v", err)
 		return 1
 	}
 	defer func() {
 		if cerr := auditLog.Close(); cerr != nil {
-			fmt.Fprintf(stderr, "hermes-node: close audit log: %v\n", cerr)
+			log.Error("close audit log: %v", cerr)
 		}
 	}()
 
-	fmt.Fprintf(stdout, "hermes-node %s: connecting to %s as %q (%d allowed paths)\n",
+	log.Info("version %s: connecting to %s as %q (%d allowed paths)",
 		version, cfg.Node.ServerURL, cfg.Node.Name, len(cfg.Node.AllowedPaths))
 
 	// prevSession tracks the persistent shell from the previous
@@ -296,7 +300,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 	// the same config is safe to reuse across reconnects.
 	tlsCfg, err := config.BuildTLSConfig(cfg.Server)
 	if err != nil {
-		fmt.Fprintf(stderr, "hermes-node: %v\n", err)
+		log.Error("%v", err)
 		return 1
 	}
 
@@ -329,7 +333,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 			// in dispatch.go is invisible to the operator.
 			d.OnError = func(err error, env wire.Envelope) {
 				stack := debug.Stack()
-				fmt.Fprintf(stderr, "hermes-node: dispatch error: %v (type=%s id=%s)\n%s\n",
+				log.Error("dispatch error: %v (type=%s id=%s)\n%s",
 					err, env.Type, env.ID, stack)
 				_ = auditLog.Write(audit.Entry{
 					Action: "dispatch_error",
@@ -381,9 +385,10 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 			return nil
 		},
 		AuditLog: auditLog,
+		Logger:   log,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "hermes-node: build supervisor: %v\n", err)
+		log.Error("build supervisor: %v", err)
 		return 1
 	}
 
@@ -393,10 +398,10 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 	// and do NOT cause Run to return.
 	runErr := sup.Run(ctx)
 	if runErr != nil && !errors.Is(runErr, context.Canceled) {
-		fmt.Fprintf(stderr, "hermes-node: supervisor exited: %v\n", runErr)
+		log.Error("supervisor exited: %v", runErr)
 		return 1
 	}
-	fmt.Fprintln(stdout, "hermes-node: clean shutdown")
+	log.Info("clean shutdown")
 	return 0
 }
 

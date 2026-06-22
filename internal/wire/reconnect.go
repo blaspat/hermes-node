@@ -8,11 +8,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"time"
 
 	"github.com/blaspat/hermes-nodes/internal/audit"
+	"github.com/blaspat/hermes-nodes/internal/logger"
 )
 
 const (
@@ -34,6 +34,7 @@ type SupervisorOptions struct {
 	BackoffFactor  float64
 
 	AuditLog ReconnectAuditWriter
+	Logger   *logger.Logger
 
 	PingerOptions PingerOptions
 
@@ -251,6 +252,8 @@ func (s *Supervisor) auditReconnect(reason error) {
 		Status:     "reconnecting",
 	}
 	if err := s.opts.AuditLog.Write(entry); err != nil {
-		log.Printf("wire: audit reconnect entry failed: %v", err)
+		if s.opts.Logger != nil {
+			s.opts.Logger.Warn("wire: audit reconnect entry failed: %v", err)
+		}
 	}
 }
