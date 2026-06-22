@@ -535,6 +535,104 @@ func TestRun_Uninstall_HelpInUsage(t *testing.T) {
 	if !strings.Contains(out.String(), "uninstall") {
 		t.Errorf("--help should mention uninstall subcommand; got %q", out.String())
 	}
+	if !strings.Contains(out.String(), "dry-run") {
+		t.Errorf("--help should mention --dry-run flag; got %q", out.String())
+	}
+}
+
+func TestRun_Uninstall_DryRun(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "hermes-node")
+	if err := os.WriteFile(binPath, []byte("fake binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := osExecutable
+	osExecutable = func() (string, error) { return binPath, nil }
+	defer func() { osExecutable = orig }()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"uninstall", "--dry-run"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "dry-run") {
+		t.Errorf("stdout should mention dry-run; got %q", stdout.String())
+	}
+	// Binary must still exist after dry-run.
+	if _, err := os.Stat(binPath); err != nil {
+		t.Errorf("binary should not be removed during dry-run; stat err = %v", err)
+	}
+}
+
+func TestRun_Uninstall_DryRunWithPurge(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "hermes-node")
+	configDir := filepath.Join(dir, ".hermes-nodes")
+	if err := os.WriteFile(binPath, []byte("fake binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	origExec := osExecutable
+	osExecutable = func() (string, error) { return binPath, nil }
+	defer func() { osExecutable = origExec }()
+	origHome := osUserHomeDir
+	osUserHomeDir = func() (string, error) { return dir, nil }
+	defer func() { osUserHomeDir = origHome }()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"uninstall", "--dry-run", "--purge"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%q", code, stderr.String())
+	}
+	// Binary must still exist.
+	if _, err := os.Stat(binPath); err != nil {
+		t.Errorf("binary should not be removed during dry-run; stat err = %v", err)
+	}
+	// Config dir must still exist.
+	if _, err := os.Stat(configDir); err != nil {
+		t.Errorf("config dir should not be removed during dry-run; stat err = %v", err)
+	}
+}
+
+func TestRun_Uninstall_SymlinkResolution(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink tests require non-Windows")
+	}
+	dir := t.TempDir()
+	targetDir := filepath.Join(dir, "lib")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targetPath := filepath.Join(targetDir, "hermes-node-v2")
+	if err := os.WriteFile(targetPath, []byte("real binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(dir, "hermes-node")
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := osExecutable
+	osExecutable = func() (string, error) { return linkPath, nil }
+	defer func() { osExecutable = orig }()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"uninstall"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%q", code, stderr.String())
+	}
+	// The symlink should be gone.
+	if _, err := os.Stat(linkPath); !os.IsNotExist(err) {
+		t.Errorf("symlink should be removed; stat err = %v", err)
+	}
+	// The target binary should also be gone (symlink resolved).
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Errorf("target binary should also be removed after symlink resolution; stat err = %v", err)
+	}
 }
 
 func TestRun_Uninstall_UnknownFlag(t *testing.T) {

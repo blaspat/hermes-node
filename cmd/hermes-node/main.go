@@ -52,7 +52,7 @@ const usage = `hermes-node — pair a laptop with a Hermes Agent brain
 Usage:
   hermes-node pair --server <wss-url> --token <token> [--config <path>]
   hermes-node run [--config <path>]
-  hermes-node uninstall [--purge]
+  hermes-node uninstall [--purge] [--dry-run]
   hermes-node --version
   hermes-node --help
 
@@ -60,9 +60,12 @@ Flags:
   --config <path>   load/save config from this path
                     (default: ~/.hermes-nodes/config.toml)
 
-'hermes-node uninstall' removes the binary, stops and removes the
-background service (systemd/launchd), and leaves the config directory
-in place. Add --purge to also remove ~/.hermes-nodes/.
+'uninstall':
+  hermes-node uninstall removes the binary, stops and removes the
+  background service (systemd/launchd), and leaves the config directory
+  in place. Add --purge to also remove ~/.hermes-nodes/ (all config,
+  tokens, and audit logs). Use --dry-run to preview what would be
+  removed without making changes.
 
 After pairing, run the node as a background service. See README.md for
 the install and pair flows.
@@ -269,11 +272,13 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 //
 // Flags:
 //
-//	--purge   also remove ~/.hermes-nodes/ (config, audit log, tokens)
+//	--purge    also remove ~/.hermes-nodes/ (config, audit log, tokens)
+//	--dry-run  preview what would be removed without making changes
 func runUninstall(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("hermes-node uninstall", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	purge := fs.Bool("purge", false, "also remove config directory (~/.hermes-nodes)")
+	purge := fs.Bool("purge", false, "also remove ~/.hermes-nodes/ — THIS DELETES ALL STORED TOKENS AND CONFIG")
+	dryRun := fs.Bool("dry-run", false, "preview changes without removing anything")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -284,14 +289,17 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	if *dryRun {
+		fmt.Fprintln(stdout, "dry-run: no changes will be made.")
+	}
+
 	binPath, err := osExecutable()
 	if err != nil {
-		// Fallback to default install location.
 		binPath = filepath.Join(home, ".local", "bin", "hermes-node")
 	}
 	configDir := filepath.Join(home, ".hermes-nodes")
 	removed := 0
-	errors_ := 0
+	errCount := 0
 
 	// ---- service removal (per OS) ----
 	switch runtime.GOOS {
@@ -299,62 +307,105 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		serviceDir := filepath.Join(home, ".config", "systemd", "user")
 		serviceFile := filepath.Join(serviceDir, "hermes-node.service")
 		if _, err := os.Stat(serviceFile); err == nil {
-			// Try to disable + stop the service first.
 			if commandExists("systemctl") {
-				cmd := exec.Command("systemctl", "--user", "disable", "--now", "hermes-node.service")
-				cmd.Stderr = stderr
-				if err := cmd.Run(); err != nil {
-					fmt.Fprintf(stderr, "hermes-node: warning: systemctl disable/stop failed: %v\n", err)
+				if *dryRun {
+					fmt.Fprintf(stdout, "would run: systemctl --user disable --now hermes-node.service\n")
+				} else {
+					cmd := exec.Command("systemctl", "--user", "disable", "--now", "hermes-node.service")
+					cmd.Stderr = stderr
+					if err := cmd.Run(); err != nil {
+						fmt.Fprintf(stderr, "hermes-node: warning: systemctl disable/stop failed: %v\n", err)
+					}
+					// Sync systemd state so a stale service definition
+					// doesn't persist in the user instance.
+					_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
 				}
 			}
-			if err := os.Remove(serviceFile); err != nil {
+			if *dryRun {
+				fmt.Fprintf(stdout, "would remove service: %s\n", serviceFile)
+			} else if err := os.Remove(serviceFile); err != nil {
 				fmt.Fprintf(stderr, "hermes-node: remove service file %s: %v\n", serviceFile, err)
-				errors_++
+				errCount++
 			} else {
 				fmt.Fprintf(stdout, "removed service: %s\n", serviceFile)
 				removed++
+			}
+			// Clean up empty parent dir.
+			if *dryRun {
+				fmt.Fprintf(stdout, "would clean up empty dir: %s\n", serviceDir)
+			} else {
+				_ = os.Remove(serviceDir) // succeeds only if empty
 			}
 		}
 	case "darwin":
 		label := "com.blaspat.hermes-node"
-		serviceFile := filepath.Join(home, "Library", "LaunchAgents", label+".plist")
+		launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
+		serviceFile := filepath.Join(launchAgentsDir, label+".plist")
 		if _, err := os.Stat(serviceFile); err == nil {
-			// Unload the agent.
 			if commandExists("launchctl") {
-				cmd := exec.Command("launchctl", "unload", serviceFile)
-				cmd.Stderr = stderr
-				_ = cmd.Run() // best-effort; may fail if already unloaded
+				if *dryRun {
+					fmt.Fprintf(stdout, "would run: launchctl unload %s\n", serviceFile)
+				} else {
+					cmd := exec.Command("launchctl", "unload", serviceFile)
+					cmd.Stderr = stderr
+					if err := cmd.Run(); err != nil {
+						fmt.Fprintf(stderr, "hermes-node: warning: launchctl unload failed — plist may still be registered: %v\n", err)
+					}
+				}
 			}
-			if err := os.Remove(serviceFile); err != nil {
+			if *dryRun {
+				fmt.Fprintf(stdout, "would remove service: %s\n", serviceFile)
+			} else if err := os.Remove(serviceFile); err != nil {
 				fmt.Fprintf(stderr, "hermes-node: remove service file %s: %v\n", serviceFile, err)
-				errors_++
+				errCount++
 			} else {
 				fmt.Fprintf(stdout, "removed service: %s\n", serviceFile)
 				removed++
 			}
+			// Clean up empty parent dir.
+			if *dryRun {
+				fmt.Fprintf(stdout, "would clean up empty dir: %s\n", launchAgentsDir)
+			} else {
+				_ = os.Remove(launchAgentsDir) // succeeds only if empty
+			}
 		}
 	default:
-		// Windows and other platforms: no service removal logic yet.
-		// The PowerShell installer handles task-scheduler uninstall.
+		if runtime.GOOS == "windows" {
+			fmt.Fprintln(stderr, "hermes-node: service removal on Windows is handled by the PowerShell installer (install.ps1 --Uninstall)")
+		}
 	}
 
 	// ---- binary removal ----
 	if _, err := os.Stat(binPath); err == nil {
-		if err := os.Remove(binPath); err != nil {
-			fmt.Fprintf(stderr, "hermes-node: remove binary %s: %v\n", binPath, err)
-			errors_++
+		if runtime.GOOS == "windows" {
+			fmt.Fprintf(stderr, "hermes-node: cannot remove running binary on Windows — stop the process first or use install.ps1 --Uninstall\n")
+			errCount++
 		} else {
-			fmt.Fprintf(stdout, "removed binary: %s\n", binPath)
-			removed++
+			// Resolve symlinks so we remove the real binary, not a symlink.
+			realPath, err := filepath.EvalSymlinks(binPath)
+			if err != nil {
+				realPath = binPath
+			}
+			if *dryRun {
+				fmt.Fprintf(stdout, "would remove binary: %s\n", realPath)
+			} else if err := os.Remove(realPath); err != nil {
+				fmt.Fprintf(stderr, "hermes-node: remove binary %s: %v\n", realPath, err)
+				errCount++
+			} else {
+				fmt.Fprintf(stdout, "removed binary: %s\n", realPath)
+				removed++
+			}
 		}
 	}
 
 	// ---- config dir removal (only with --purge) ----
 	if *purge {
 		if _, err := os.Stat(configDir); err == nil {
-			if err := os.RemoveAll(configDir); err != nil {
+			if *dryRun {
+				fmt.Fprintf(stdout, "would remove config directory: %s\n", configDir)
+			} else if err := os.RemoveAll(configDir); err != nil {
 				fmt.Fprintf(stderr, "hermes-node: remove config dir %s: %v\n", configDir, err)
-				errors_++
+				errCount++
 			} else {
 				fmt.Fprintf(stdout, "removed config directory: %s\n", configDir)
 				removed++
@@ -362,19 +413,24 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	if removed == 0 && errors_ == 0 {
+	if *dryRun {
+		fmt.Fprintln(stdout, "dry-run complete. No changes were made.")
+		return 0
+	}
+
+	if removed == 0 && errCount == 0 {
 		fmt.Fprintln(stdout, "nothing to uninstall — no binary, service, or config found.")
-	} else if errors_ == 0 {
+	} else if errCount == 0 {
 		fmt.Fprintln(stdout, "uninstall complete.")
 	} else {
-		fmt.Fprintf(stdout, "uninstall finished with %d error(s).\n", errors_)
+		fmt.Fprintf(stdout, "uninstall finished with %d error(s).\n", errCount)
 	}
 
 	if !*purge {
-		fmt.Fprintf(stdout, "config directory left in place: %s (pass --purge to remove)\n", configDir)
+		fmt.Fprintf(stdout, "config directory left in place: %s (pass --purge to remove — THIS DELETES ALL TOKENS)\n", configDir)
 	}
 
-	if errors_ > 0 {
+	if errCount > 0 {
 		return 1
 	}
 	return 0
