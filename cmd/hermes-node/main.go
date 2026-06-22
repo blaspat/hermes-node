@@ -333,7 +333,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 			// in dispatch.go is invisible to the operator.
 			d.OnError = func(err error, env wire.Envelope) {
 				stack := debug.Stack()
-				log.Error("dispatch error: %v (type=%s id=%s)\n%s",
+				log.Error("dispatch error: %v (type=%s id=%s) %s",
 					err, env.Type, env.ID, stack)
 				_ = auditLog.Write(audit.Entry{
 					Action: "dispatch_error",
