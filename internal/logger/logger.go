@@ -87,6 +87,12 @@ func NewWithWriters(level Level, infoOut, errOut io.Writer) *Logger {
 // Level returns the logger's current level.
 func (l *Logger) Level() Level { return l.level }
 
+// SetLevel changes the logger's level at runtime. Safe to call
+// concurrently with log method calls.
+func (l *Logger) SetLevel(level Level) {
+	l.level = level
+}
+
 // Debug logs at DEBUG level to stdout.
 func (l *Logger) Debug(format string, args ...any) {
 	if l.level > LevelDebug {
