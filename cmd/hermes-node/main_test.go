@@ -860,6 +860,68 @@ log_path = "` + filepath.Join(dir, "nonexistent", "audit.log") + `"
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Status subcommand tests
+// ---------------------------------------------------------------------------
+
+func TestRun_Status_NoFile(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	// Point to a non-existent config dir — status file won't exist.
+	code := run([]string{"status", "--config", "/nonexistent/path/config.toml"}, &stdout, &stderr)
+	if code != 0 {
+		t.Errorf("exit = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "not found") {
+		t.Errorf("stdout should mention 'not found'; got %q", stdout.String())
+	}
+}
+
+func TestRun_Status_DisplaysFile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	// Create a minimal config so the config directory exists.
+	os.WriteFile(cfgPath, []byte(""), 0o600)
+	statusPath := filepath.Join(dir, "status.json")
+	contents := `{"pid":99999,"state":"connected","name":"test-node","server_url":"wss://x","version":"dev","session_id":"sess-1","started_at":"2026-06-22T21:00:00Z","last_connected_at":"2026-06-22T21:05:00Z"}`
+	if err := os.WriteFile(statusPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"status", "--config", cfgPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "test-node") {
+		t.Errorf("stdout should mention node name; got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "sess-1") {
+		t.Errorf("stdout should mention session ID; got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "connected") {
+		t.Errorf("stdout should mention state; got %q", stdout.String())
+	}
+}
+
+func TestRun_Status_HelpInUsage(t *testing.T) {
+	var out bytes.Buffer
+	code := run([]string{"--help"}, &out, &bytes.Buffer{})
+	if code != 0 {
+		t.Fatalf("--help: exit %d", code)
+	}
+	if !strings.Contains(out.String(), "status") {
+		t.Errorf("--help should mention status subcommand; got %q", out.String())
+	}
+}
+
+func TestRun_Status_UnknownFlag(t *testing.T) {
+	var stderr bytes.Buffer
+	code := run([]string{"status", "--bogus"}, &bytes.Buffer{}, &stderr)
+	if code != 2 {
+		t.Errorf("exit = %d, want 2; stderr=%q", code, stderr.String())
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

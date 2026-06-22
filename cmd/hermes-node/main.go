@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,6 +30,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/blaspat/hermes-nodes/internal/audit"
 	"github.com/blaspat/hermes-nodes/internal/config"
@@ -94,6 +96,7 @@ const usage = `hermes-node — pair a laptop with a Hermes Agent brain
 Usage:
   hermes-node pair --server <wss-url> --token <token> [--config <path>]
   hermes-node run [--config <path>]
+  hermes-node status
   hermes-node uninstall [--purge] [--dry-run]
   hermes-node validate [--config <path>]
   hermes-node --version
@@ -102,6 +105,11 @@ Usage:
 Flags:
   --config <path>   load/save config from this path
                     (default: ~/.hermes-nodes/config.toml)
+
+'status':
+  hermes-node status reads the daemon's status file and displays
+  the current state, session ID, uptime, and last error. No server
+  connection is made.
 
 'uninstall':
   hermes-node uninstall removes the binary, stops and removes the
@@ -182,6 +190,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runUninstall(subArgs[1:], stdout, stderr)
 	case "validate":
 		return runValidate(subArgs[1:], *configPath, stdout, stderr)
+	case "status":
+		return runStatus(subArgs[1:], stdout, stderr, *configPath)
 	default:
 		fmt.Fprintf(stderr, "hermes-node: unknown subcommand %q (run 'hermes-node --help')\n", subArgs[0])
 		return 2
@@ -641,6 +651,19 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 		}
 	}()
 
+	// Initialize the status file so `hermes-node status` works
+	// even before the first connection attempt.
+	statusPath := statusFilePath(getConfigDir(configPath))
+	startedAt := time.Now().UTC().Format(time.RFC3339)
+	_ = writeStatus(statusPath, &nodeStatus{
+		PID:       os.Getpid(),
+		State:     "starting",
+		Name:      cfg.Node.Name,
+		ServerURL: cfg.Node.ServerURL,
+		Version:   version,
+		StartedAt: startedAt,
+	})
+
 	log.Info("version %s: connecting to %s as %q (%d allowed paths)",
 		version, cfg.Node.ServerURL, cfg.Node.Name, len(cfg.Node.AllowedPaths))
 
@@ -686,6 +709,18 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 		Setup: func(ctx context.Context, c *wire.Client, d *wire.Dispatcher, p *wire.Pinger) error {
 			// Bump the watchdog clock on every received frame.
 			d.OnRead = p.MarkAlive
+
+			// Update status file with session info on (re)connect.
+			_ = writeStatus(statusPath, &nodeStatus{
+				PID:             os.Getpid(),
+				State:           "connected",
+				Name:            cfg.Node.Name,
+				ServerURL:       cfg.Node.ServerURL,
+				Version:         version,
+				SessionID:       c.SessionID(),
+				StartedAt:       startedAt,
+				LastConnectedAt: time.Now().UTC().Format(time.RFC3339),
+			})
 			// Surface wire-level errors (handler panics, write
 			// failures) to the operator via stderr AND the audit
 			// log, with the panic stack included so a postmortem
@@ -760,10 +795,155 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 	runErr := sup.Run(ctx)
 	if runErr != nil && !errors.Is(runErr, context.Canceled) {
 		log.Error("supervisor exited: %v", runErr)
+		_ = writeStatus(statusPath, &nodeStatus{
+			PID:       os.Getpid(),
+			State:     "stopped",
+			Name:      cfg.Node.Name,
+			ServerURL: cfg.Node.ServerURL,
+			Version:   version,
+			StartedAt: startedAt,
+			LastError: runErr.Error(),
+		})
 		return 1
 	}
 	log.Info("clean shutdown")
+	_ = writeStatus(statusPath, &nodeStatus{
+		PID:       os.Getpid(),
+		State:     "stopped",
+		Name:      cfg.Node.Name,
+		ServerURL: cfg.Node.ServerURL,
+		Version:   version,
+		StartedAt: startedAt,
+	})
 	return 0
+}
+
+// ---- status file (used by runRun daemon and status subcommand) ----
+
+// nodeStatus is written periodically by the daemon process and read
+// by `hermes-node status`. Fields are JSON-tagged for file format
+// stability. Times are RFC3339 strings for human readability.
+type nodeStatus struct {
+	PID       int    `json:"pid"`
+	State     string `json:"state"` // "starting" | "connected" | "reconnecting" | "stopped"
+	Name      string `json:"name,omitempty"`
+	ServerURL string `json:"server_url,omitempty"`
+	Version   string `json:"version,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+
+	StartedAt       string `json:"started_at,omitempty"`
+	LastConnectedAt string `json:"last_connected_at,omitempty"`
+	LastReconnectAt string `json:"last_reconnect_at,omitempty"`
+	LastError       string `json:"last_error,omitempty"`
+}
+
+// statusFilePath returns the default status file location under configDir.
+func statusFilePath(configDir string) string {
+	return filepath.Join(configDir, "status.json")
+}
+
+// writeStatus atomically writes status to the JSON file.
+func writeStatus(path string, s *nodeStatus) error {
+	if s == nil {
+		return fmt.Errorf("status: cannot write nil")
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		return fmt.Errorf("status: marshal: %w", err)
+	}
+	// Write to a temp file first, then rename for atomicity.
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return fmt.Errorf("status: write tmp: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("status: rename: %w", err)
+	}
+	return nil
+}
+
+// readStatus reads and parses the status file at path.
+func readStatus(path string) (*nodeStatus, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var s nodeStatus
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, fmt.Errorf("status: parse: %w", err)
+	}
+	return &s, nil
+}
+
+// runStatus reads and displays the daemon status file.
+func runStatus(args []string, stdout, stderr io.Writer, configPath string) int {
+	fs := flag.NewFlagSet("hermes-node status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	cfgDir := getConfigDir(configPath)
+	statusPath := statusFilePath(cfgDir)
+
+	s, err := readStatus(statusPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintln(stdout, "hermes-node: daemon status file not found — node has never been started.")
+			return 0
+		}
+		fmt.Fprintf(stderr, "hermes-node: read status: %v\n", err)
+		return 1
+	}
+
+	// Check if the PID is still alive.
+	running := true
+	if s.PID > 0 {
+		proc, err := os.FindProcess(s.PID)
+		if err != nil || proc.Signal(os.Signal(syscall.Signal(0))) != nil {
+			running = false
+		}
+	}
+
+	fmt.Fprintf(stdout, "hermes-node %s\n", s.Version)
+	fmt.Fprintf(stdout, "  PID:       %d", s.PID)
+	if !running {
+		fmt.Fprintf(stdout, " (not running)")
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "  State:     %s\n", s.State)
+	if s.Name != "" {
+		fmt.Fprintf(stdout, "  Name:      %s\n", s.Name)
+	}
+	if s.ServerURL != "" {
+		fmt.Fprintf(stdout, "  Server:    %s\n", s.ServerURL)
+	}
+	if s.SessionID != "" {
+		fmt.Fprintf(stdout, "  Session:   %s\n", s.SessionID)
+	}
+	if s.StartedAt != "" {
+		fmt.Fprintf(stdout, "  Started:   %s\n", s.StartedAt)
+	}
+	if s.LastConnectedAt != "" {
+		fmt.Fprintf(stdout, "  Connected: %s\n", s.LastConnectedAt)
+	}
+	if s.LastReconnectAt != "" {
+		fmt.Fprintf(stdout, "  Reconnect: %s\n", s.LastReconnectAt)
+	}
+	if s.LastError != "" {
+		fmt.Fprintf(stdout, "  Last err:  %s\n", s.LastError)
+	}
+	return 0
+}
+
+// getConfigDir returns the config directory from a config file path.
+// e.g., "/home/user/.hermes-nodes/config.toml" → "/home/user/.hermes-nodes"
+func getConfigDir(configPath string) string {
+	if configPath == "" {
+		return ""
+	}
+	return filepath.Dir(configPath)
 }
 
 // defaultConfigPath returns the operator-default location for
