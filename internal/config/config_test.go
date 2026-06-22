@@ -276,6 +276,55 @@ func TestSave_RejectsIncompleteConfig(t *testing.T) {
 	}
 }
 
+func TestLoad_AppliesDefaultLogLevel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	contents := `
+[node]
+server_url = "wss://vps.example.com:6969"
+name = "ci-runner"
+token = "ci-runner-token"
+allowed_paths = ["/tmp"]
+log_path = "/tmp/audit.log"
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Node.LogLevel != "info" {
+		t.Errorf("Node.LogLevel = %q, want default %q", cfg.Node.LogLevel, "info")
+	}
+}
+
+func TestLoad_ParsesLogLevel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	contents := `
+[node]
+server_url = "wss://vps.example.com:6969"
+name = "ci-runner"
+token = "ci-runner-token"
+allowed_paths = ["/tmp"]
+log_path = "/tmp/audit.log"
+log_level = "debug"
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Node.LogLevel != "debug" {
+		t.Errorf("Node.LogLevel = %q, want %q", cfg.Node.LogLevel, "debug")
+	}
+}
+
 func TestLoad_MissingFile(t *testing.T) {
 	if _, err := Load("/nonexistent/config.toml"); err == nil {
 		t.Fatal("Load returned nil error; want error for missing file")
