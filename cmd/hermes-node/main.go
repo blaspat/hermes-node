@@ -1,15 +1,24 @@
 // hermes-node is the Go binary that pairs a laptop with a remote Hermes
-// Agent brain. Two subcommands:
+// Agent brain. Subcommands:
 //
 //	hermes-node pair --server <wss-url> --token <token> [--name <name>] [--config <path>]
-//	  Write a fresh config.toml with the supplied values, mode 0600. The
-//	  operator runs this once after install; the file is the long-lived
-//	  pairing artifact (see SECURITY-REVIEW.md).
+//	  Write a fresh config.toml with the supplied values, mode 0600.
 //
 //	hermes-node run [--config <path>]
-//	  Long-lived background service. Loads the config, opens the audit log,
-//	  connects to the server, and stays connected across drops via the
-//	  reconnect supervisor. Blocks on signals.
+//	  Long-lived background service. Loads the config, connects to the
+//	  server, and stays connected via the reconnect supervisor.
+//
+//	hermes-node status
+//	  Read the daemon's status file and display connection state.
+//
+//	hermes-node update [--version <tag>] [--restart-service] [--yes]
+//	  Self-update from GitHub Releases.
+//
+//	hermes-node uninstall [--purge] [--dry-run]
+//	  Remove binary, service registration, and optionally config.
+//
+//	hermes-node validate [--config <path>]
+//	  Validate config.toml without connecting to the server.
 //
 //	hermes-node --version | --help
 //	  Print version / usage and exit.
