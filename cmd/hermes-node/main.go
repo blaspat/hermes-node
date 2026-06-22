@@ -83,13 +83,6 @@ func init() {
 	// and --version falls back to the simple format.
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // osExecutable is a variable so tests can override it.
 var osExecutable = os.Executable
 

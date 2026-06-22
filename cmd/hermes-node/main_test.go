@@ -224,8 +224,9 @@ func TestRun_NoSubcommand(t *testing.T) {
 
 func TestRun_VersionAndHelp(t *testing.T) {
 	var out bytes.Buffer
-	if code := run([]string{"--version"}, &out, &bytes.Buffer{}); code != 0 {
-		t.Errorf("--version: exit %d", code)
+	code := run([]string{"--version"}, &out, &bytes.Buffer{})
+	if code != 0 {
+		t.Errorf("--version: exit %d, want 0", code)
 	}
 	if !strings.HasPrefix(out.String(), "hermes-node ") {
 		t.Errorf("--version: output = %q, want 'hermes-node ...' prefix", out.String())
@@ -263,6 +264,25 @@ func TestBuildMetadataFormat(t *testing.T) {
 		t.Fatalf("--version: exit %d", code)
 	}
 	want := "hermes-node dev go1.22.5 abc1234 2026-06-22\n"
+	if out.String() != want {
+		t.Errorf("--version output: got %q, want %q", out.String(), want)
+	}
+}
+
+// TestVersionFallbackFormat verifies that --version falls back to the
+// bare version string when buildMetadata is empty (e.g. ReadBuildInfo
+// failed or returned no VCS settings).
+func TestVersionFallbackFormat(t *testing.T) {
+	saved := buildMetadata
+	defer func() { buildMetadata = saved }()
+
+	buildMetadata = ""
+	var out bytes.Buffer
+	code := run([]string{"--version"}, &out, &bytes.Buffer{})
+	if code != 0 {
+		t.Fatalf("--version: exit %d", code)
+	}
+	want := "hermes-node dev\n"
 	if out.String() != want {
 		t.Errorf("--version output: got %q, want %q", out.String(), want)
 	}
