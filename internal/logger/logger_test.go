@@ -174,3 +174,21 @@ func TestPrintf(t *testing.T) {
 		t.Errorf("Printf output missing message: %q", buf.String())
 	}
 }
+
+func TestSetLevel(t *testing.T) {
+	var buf bytes.Buffer
+	l := NewWithWriters(LevelError, &buf, &buf)
+
+	// At ERROR level, debug/info/warn should be suppressed.
+	l.Info("should be hidden")
+	if strings.Contains(buf.String(), "hidden") {
+		t.Errorf("info message visible at ERROR level")
+	}
+
+	// After switching to DEBUG, all messages are visible.
+	l.SetLevel(LevelDebug)
+	l.Debug("now visible")
+	if !strings.Contains(buf.String(), "visible") {
+		t.Errorf("debug message not visible after SetLevel(DEBUG)")
+	}
+}

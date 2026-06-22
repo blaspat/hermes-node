@@ -681,6 +681,25 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 		log.Warn("write status file: %v", err)
 	}
 
+	// Start a goroutine that reloads config on SIGHUP. The reload
+	// applies changes to the logger level; other config changes
+	// (allowed_paths, log_path) require a full restart.
+	sighupCh := make(chan os.Signal, 1)
+	signal.Notify(sighupCh, syscall.SIGHUP)
+	go func() {
+		for range sighupCh {
+			reloaded, err := config.Load(configPath)
+			if err != nil {
+				log.Warn("SIGHUP reload failed: %v", err)
+				continue
+			}
+			// Apply log level change at runtime.
+			newLevel, _ := logger.ParseLevel(reloaded.Node.LogLevel)
+			log.SetLevel(newLevel)
+			log.Info("SIGHUP: config reloaded (log_level=%s)", reloaded.Node.LogLevel)
+		}
+	}()
+
 	log.Info("version %s: connecting to %s as %q (%d allowed paths)",
 		version, cfg.Node.ServerURL, cfg.Node.Name, len(cfg.Node.AllowedPaths))
 
