@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoad_ValidFile(t *testing.T) {
@@ -328,6 +329,55 @@ log_level = "debug"
 func TestLoad_MissingFile(t *testing.T) {
 	if _, err := Load("/nonexistent/config.toml"); err == nil {
 		t.Fatal("Load returned nil error; want error for missing file")
+	}
+}
+
+func TestBackoffInitialDuration_Defaults(t *testing.T) {
+	var n NodeConfig
+	if d := n.BackoffInitialDuration(); d != time.Second {
+		t.Errorf("default BackoffInitialDuration = %v, want 1s", d)
+	}
+}
+
+func TestBackoffInitialDuration_Parses(t *testing.T) {
+	n := NodeConfig{BackoffInitial: "5s"}
+	if d := n.BackoffInitialDuration(); d != 5*time.Second {
+		t.Errorf("BackoffInitialDuration = %v, want 5s", d)
+	}
+}
+
+func TestBackoffInitialDuration_Invalid(t *testing.T) {
+	n := NodeConfig{BackoffInitial: "bogus"}
+	if d := n.BackoffInitialDuration(); d != time.Second {
+		t.Errorf("invalid BackoffInitialDuration = %v, want default 1s", d)
+	}
+}
+
+func TestBackoffMaxDuration_Defaults(t *testing.T) {
+	var n NodeConfig
+	if d := n.BackoffMaxDuration(); d != 60*time.Second {
+		t.Errorf("default BackoffMaxDuration = %v, want 60s", d)
+	}
+}
+
+func TestBackoffMaxDuration_Parses(t *testing.T) {
+	n := NodeConfig{BackoffMax: "120s"}
+	if d := n.BackoffMaxDuration(); d != 120*time.Second {
+		t.Errorf("BackoffMaxDuration = %v, want 120s", d)
+	}
+}
+
+func TestBackoffFactorValue_Defaults(t *testing.T) {
+	var n NodeConfig
+	if f := n.BackoffFactorValue(); f != 2.0 {
+		t.Errorf("default BackoffFactorValue = %f, want 2.0", f)
+	}
+}
+
+func TestBackoffFactorValue_Returns(t *testing.T) {
+	n := NodeConfig{BackoffFactor: 3.0}
+	if f := n.BackoffFactorValue(); f != 3.0 {
+		t.Errorf("BackoffFactorValue = %f, want 3.0", f)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -28,12 +29,50 @@ type Config struct {
 // to callers that pass a file with looser permissions, so a chmod slip
 // during a manual edit can't accidentally widen the token's visibility.
 type NodeConfig struct {
-	ServerURL    string   `toml:"server_url"`
-	Name         string   `toml:"name"`
-	Token        string   `toml:"token"`
-	AllowedPaths []string `toml:"allowed_paths"`
-	LogPath      string   `toml:"log_path"`
-	LogLevel     string   `toml:"log_level"`
+	ServerURL       string   `toml:"server_url"`
+	Name            string   `toml:"name"`
+	Token           string   `toml:"token"`
+	AllowedPaths    []string `toml:"allowed_paths"`
+	LogPath         string   `toml:"log_path"`
+	LogLevel        string   `toml:"log_level"`
+	BackoffInitial  string  `toml:"backoff_initial"`
+	BackoffMax      string  `toml:"backoff_max"`
+	BackoffFactor   float64 `toml:"backoff_factor"`
+}
+
+// BackoffInitialDuration parses BackoffInitial as a Go duration string
+// (e.g. "1s", "500ms"). Returns the default (1s) when empty or invalid.
+func (n NodeConfig) BackoffInitialDuration() time.Duration {
+	if n.BackoffInitial == "" {
+		return time.Second
+	}
+	d, err := time.ParseDuration(n.BackoffInitial)
+	if err != nil || d <= 0 {
+		return time.Second
+	}
+	return d
+}
+
+// BackoffMaxDuration parses BackoffMax as a Go duration string.
+// Returns the default (60s) when empty or invalid.
+func (n NodeConfig) BackoffMaxDuration() time.Duration {
+	if n.BackoffMax == "" {
+		return 60 * time.Second
+	}
+	d, err := time.ParseDuration(n.BackoffMax)
+	if err != nil || d <= 0 {
+		return 60 * time.Second
+	}
+	return d
+}
+
+// BackoffFactorValue returns the backoff multiplier. Returns the
+// default (2.0) when the field is zero or negative.
+func (n NodeConfig) BackoffFactorValue() float64 {
+	if n.BackoffFactor <= 0 {
+		return 2.0
+	}
+	return n.BackoffFactor
 }
 
 // ServerConfig describes how the node should validate the server's TLS cert.
