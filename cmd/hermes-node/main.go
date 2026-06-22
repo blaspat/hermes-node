@@ -824,6 +824,9 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 		},
 		AuditLog: auditLog,
 		Logger:   log,
+		BackoffInitial: cfg.Node.BackoffInitialDuration(),
+		BackoffMax:     cfg.Node.BackoffMaxDuration(),
+		BackoffFactor:  cfg.Node.BackoffFactorValue(),
 	})
 	if err != nil {
 		log.Error("build supervisor: %v", err)
