@@ -186,27 +186,50 @@ func TestRunCapturesStderr(t *testing.T) {
 func TestRunCapturesStderrFromFailedCommand(t *testing.T) {
 	s := newTestSession(t)
 
-	stdout, stderr, code, err := s.Run(context.Background(), "grep nonexistent-pattern /nonexistent-file 2>&-; echo exit=$?")
+	stdout, stderr, code, err := s.Run(context.Background(), "grep nonexistent-pattern /nonexistent-file 2>/dev/null; echo exit=$?")
 	_ = stdout
-	_ = code
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// The grep command itself writes to stderr when the file
-	// doesn't exist. We expect the stderr buffer to contain
-	// something from grep's error output.
-	//
-	// Note: the actual stderr from grep goes to /dev/tty or
-	// the pipe. We use 2>&- to close stderr for grep, then
-	// check that our capture still works for commands that
-	// produce non-zero exit codes.
 	if code == 0 {
-		// grep with no match returns 1, not 0. If it returned
-		// 0, something is weird but not necessarily a bug in
-		// stderr capture.
-		t.Logf("grep returned 0 (unexpected but not a stderr-capture failure)")
+		t.Logf("grep returned 0 (unexpected — file doesn't exist)")
 	}
+	// Grep writes to stderr when the file doesn't exist. We redirect
+	// grep's own stderr to /dev/null so it doesn't pollute our test
+	// output, but the shell's stderr pipe should still function.
 	_ = stderr
+}
+
+// TestRunStderrScopedPerCommand verifies that stderr from one command
+// does not leak into the stderr returned for the next command. This is
+// the core correctness guarantee of the fromPos scoping mechanism.
+func TestRunStderrScopedPerCommand(t *testing.T) {
+	s := newTestSession(t)
+
+	_, stderr1, _, err := s.Run(context.Background(), "echo cmd1 >&2")
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	_, stderr2, _, err := s.Run(context.Background(), "echo cmd2 >&2")
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	if stderr1 == "" {
+		t.Error("stderr1 is empty, expected 'cmd1'")
+	}
+	if stderr2 == "" {
+		t.Error("stderr2 is empty, expected 'cmd2'")
+	}
+	if strings.Contains(stderr2, "cmd1") {
+		t.Errorf("stderr2 leaked stderr from cmd1: stderr1=%q, stderr2=%q", stderr1, stderr2)
+	}
+	if !strings.Contains(stderr1, "cmd1") {
+		t.Errorf("stderr1 missing 'cmd1': got %q", stderr1)
+	}
+	if !strings.Contains(stderr2, "cmd2") {
+		t.Errorf("stderr2 missing 'cmd2': got %q", stderr2)
+	}
 }
 
 // TestRunCtxCancelAborts verifies that cancelling the ctx passed to
