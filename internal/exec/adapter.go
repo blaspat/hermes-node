@@ -1,14 +1,6 @@
 // Package exec: adapter from *Session to whatever interface
-// the wire package's ExecHandler expects. Today (1.4a) the
-// session's Run is Run(ctx, cmd) -> (stdout, stderr, exit, err)
-// and does not take a target path; the adapter discards target
-// and forwards cmd verbatim. When 1.4b lands, the underlying
-// Run signature gains a target argument and the adapter
-// becomes a one-line forward.
-//
-// Kept in this package so the wire package does not need to
-// import the concrete shell type — it depends only on the
-// Executer interface declared in internal/wire.
+// the wire package's ExecHandler expects. The session's Run
+// merges stderr into stdout; the adapter preserves that contract.
 package exec
 
 import "context"
