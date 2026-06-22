@@ -922,6 +922,23 @@ func TestRun_Status_UnknownFlag(t *testing.T) {
 	}
 }
 
+func TestRun_Status_CorruptedFile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	os.WriteFile(cfgPath, []byte(""), 0o600)
+	// Write invalid JSON to the status file.
+	os.WriteFile(filepath.Join(dir, "status.json"), []byte("{invalid json}"), 0o600)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"status", "--config", cfgPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "parse") {
+		t.Errorf("stderr should mention parse error; got %q", stderr.String())
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

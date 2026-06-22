@@ -655,14 +655,16 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 	// even before the first connection attempt.
 	statusPath := statusFilePath(getConfigDir(configPath))
 	startedAt := time.Now().UTC().Format(time.RFC3339)
-	_ = writeStatus(statusPath, &nodeStatus{
+	if err := writeStatus(statusPath, &nodeStatus{
 		PID:       os.Getpid(),
 		State:     "starting",
 		Name:      cfg.Node.Name,
 		ServerURL: cfg.Node.ServerURL,
 		Version:   version,
 		StartedAt: startedAt,
-	})
+	}); err != nil {
+		log.Warn("write status file: %v", err)
+	}
 
 	log.Info("version %s: connecting to %s as %q (%d allowed paths)",
 		version, cfg.Node.ServerURL, cfg.Node.Name, len(cfg.Node.AllowedPaths))
@@ -711,7 +713,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 			d.OnRead = p.MarkAlive
 
 			// Update status file with session info on (re)connect.
-			_ = writeStatus(statusPath, &nodeStatus{
+			if err := writeStatus(statusPath, &nodeStatus{
 				PID:             os.Getpid(),
 				State:           "connected",
 				Name:            cfg.Node.Name,
@@ -720,7 +722,9 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				SessionID:       c.SessionID(),
 				StartedAt:       startedAt,
 				LastConnectedAt: time.Now().UTC().Format(time.RFC3339),
-			})
+			}); err != nil {
+				log.Warn("write status file: %v", err)
+			}
 			// Surface wire-level errors (handler panics, write
 			// failures) to the operator via stderr AND the audit
 			// log, with the panic stack included so a postmortem
@@ -795,7 +799,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 	runErr := sup.Run(ctx)
 	if runErr != nil && !errors.Is(runErr, context.Canceled) {
 		log.Error("supervisor exited: %v", runErr)
-		_ = writeStatus(statusPath, &nodeStatus{
+		if err := writeStatus(statusPath, &nodeStatus{
 			PID:       os.Getpid(),
 			State:     "stopped",
 			Name:      cfg.Node.Name,
@@ -803,29 +807,39 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 			Version:   version,
 			StartedAt: startedAt,
 			LastError: runErr.Error(),
-		})
+		}); err != nil {
+			log.Warn("write status file: %v", err)
+		}
 		return 1
 	}
 	log.Info("clean shutdown")
-	_ = writeStatus(statusPath, &nodeStatus{
+	if err := writeStatus(statusPath, &nodeStatus{
 		PID:       os.Getpid(),
 		State:     "stopped",
 		Name:      cfg.Node.Name,
 		ServerURL: cfg.Node.ServerURL,
 		Version:   version,
 		StartedAt: startedAt,
-	})
+	}); err != nil {
+		log.Warn("write status file: %v", err)
+	}
 	return 0
 }
 
 // ---- status file (used by runRun daemon and status subcommand) ----
 
-// nodeStatus is written periodically by the daemon process and read
-// by `hermes-node status`. Fields are JSON-tagged for file format
+// nodeStatus is written by the daemon process and read by
+// `hermes-node status`. Fields are JSON-tagged for file format
 // stability. Times are RFC3339 strings for human readability.
+//
+// The status file is written atomically via tmp+rename, so a
+// concurrent reader sees either the old file or the new file,
+// never a partial write. On Windows, os.Rename is NOT atomic
+// when the target exists, but the window is small and the
+// worst case is a stale read (the old file is still there).
 type nodeStatus struct {
 	PID       int    `json:"pid"`
-	State     string `json:"state"` // "starting" | "connected" | "reconnecting" | "stopped"
+	State     string `json:"state"` // "starting" | "connected" | "stopped"
 	Name      string `json:"name,omitempty"`
 	ServerURL string `json:"server_url,omitempty"`
 	Version   string `json:"version,omitempty"`
@@ -833,7 +847,6 @@ type nodeStatus struct {
 
 	StartedAt       string `json:"started_at,omitempty"`
 	LastConnectedAt string `json:"last_connected_at,omitempty"`
-	LastReconnectAt string `json:"last_reconnect_at,omitempty"`
 	LastError       string `json:"last_error,omitempty"`
 }
 
@@ -927,9 +940,6 @@ func runStatus(args []string, stdout, stderr io.Writer, configPath string) int {
 	}
 	if s.LastConnectedAt != "" {
 		fmt.Fprintf(stdout, "  Connected: %s\n", s.LastConnectedAt)
-	}
-	if s.LastReconnectAt != "" {
-		fmt.Fprintf(stdout, "  Reconnect: %s\n", s.LastReconnectAt)
 	}
 	if s.LastError != "" {
 		fmt.Fprintf(stdout, "  Last err:  %s\n", s.LastError)
