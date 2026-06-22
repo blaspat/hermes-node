@@ -849,9 +849,18 @@ const (
 	githubDL   = "https://github.com/" + githubRepo + "/releases/download"
 )
 
+// httpClient is used for GitHub API and download requests. The
+// timeout prevents indefinite hangs on unreachable networks.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
 // latestReleaseTag fetches the latest release tag from GitHub API.
 func latestReleaseTag() (string, error) {
-	resp, err := http.Get(githubAPI)
+	req, err := http.NewRequest("GET", githubAPI, nil)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("User-Agent", "hermes-node-update/1.0")
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch latest release: %w", err)
 	}
@@ -929,7 +938,13 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
 
-	resp, err := http.Get(dlURL)
+	req, err := http.NewRequest("GET", dlURL, nil)
+	if err != nil {
+		fmt.Fprintf(stderr, "hermes-node: build download request: %v\n", err)
+		return 1
+	}
+	req.Header.Set("User-Agent", "hermes-node-update/1.0")
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		fmt.Fprintf(stderr, "hermes-node: download: %v\n", err)
 		return 1
@@ -967,12 +982,18 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if err := os.Rename(tmpPath, binPath); err != nil {
-		fmt.Fprintf(stderr, "hermes-node: replace binary: %v\n", err)
+		if errors.Is(err, syscall.EXDEV) {
+			fmt.Fprintf(stderr, "hermes-node: temp file is on a different filesystem than %s.\n", binPath)
+			fmt.Fprintf(stderr, "  Run: cp %s %s && chmod +x %s\n", tmpPath, binPath, binPath)
+		} else {
+			fmt.Fprintf(stderr, "hermes-node: replace binary %s: %v\n", binPath, err)
+		}
 		return 1
 	}
 	fmt.Fprintf(stdout, "replaced: %s\n", binPath)
 
 	// 7. Optionally re-register the service.
+	restartFailed := false
 	if *restartService {
 		switch runtime.GOOS {
 		case "linux":
@@ -980,9 +1001,11 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stdout, "restarting systemd user service ...\n")
 				if err := exec.Command("systemctl", "--user", "daemon-reload").Run(); err != nil {
 					fmt.Fprintf(stderr, "hermes-node: daemon-reload: %v\n", err)
+					restartFailed = true
 				}
 				if err := exec.Command("systemctl", "--user", "restart", "hermes-node.service").Run(); err != nil {
 					fmt.Fprintf(stderr, "hermes-node: restart service: %v\n", err)
+					restartFailed = true
 				}
 			}
 		case "darwin":
@@ -990,13 +1013,25 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stdout, "restarting launchd agent ...\n")
 				label := "com.blaspat.hermes-node"
 				plist := filepath.Join(os.Getenv("HOME"), "Library", "LaunchAgents", label+".plist")
-				_ = exec.Command("launchctl", "unload", plist).Run()
-				_ = exec.Command("launchctl", "load", plist).Run()
+				if err := exec.Command("launchctl", "unload", plist).Run(); err != nil {
+					fmt.Fprintf(stderr, "hermes-node: launchctl unload: %v\n", err)
+					restartFailed = true
+				}
+				if err := exec.Command("launchctl", "load", plist).Run(); err != nil {
+					fmt.Fprintf(stderr, "hermes-node: launchctl load: %v\n", err)
+					restartFailed = true
+				}
 			}
 		}
 	}
+	if restartFailed {
+		fmt.Fprintf(stderr, "hermes-node: service restart failed — the binary was updated but the service was not restarted.\n")
+	}
 
 	fmt.Fprintf(stdout, "update complete. Restart the daemon or reboot to pick up the new binary.\n")
+	if restartFailed {
+		return 1
+	}
 	return 0
 }
 
