@@ -22,7 +22,7 @@
 curl -sSL https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.sh | sh
 
 # Pair with your Hermes brain
-hermes-node pair --server wss://vps.yourdomain.com:7000 --token <TOKEN>
+hermes-node pair --server wss://vps.yourdomain.com:7000 --token <TOKEN> --name work-laptop
 
 # Edit config to set allowed paths
 #   ~/.hermes-nodes/config.toml
@@ -79,7 +79,7 @@ Requires Go 1.22+.
 Writes a fresh `config.toml` with the server URL, node name, and pairing token. The file is created with mode 0600. The operator edits it after pairing to add `allowed_paths`.
 
 ```bash
-hermes-node pair --server wss://vps.example.com:7000 --token <TOKEN> [--name work-laptop] [--config <path>]
+hermes-node pair --server wss://vps.example.com:7000 --token <TOKEN> --name <name> [--config <path>]
 ```
 
 ### `hermes-node run`
@@ -210,9 +210,9 @@ log_path = "/home/user/.hermes-nodes/audit.log"
 log_level = "debug"
 
 # Reconnect backoff (defaults shown)
-backoff_initial = "1s"      # Go duration, e.g. "500ms", "5s"
-backoff_max = "60s"         # maximum delay between retries
-backoff_factor = 2.0        # multiplier per retry
+backoff_initial = "1s"      # default; Go duration, e.g. "500ms", "5s"
+backoff_max = "60s"         # default; maximum delay between retries
+backoff_factor = 2.0        # default; multiplier per retry
 ```
 
 ### `[server]` section
@@ -295,12 +295,11 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the full guidelines.
 
 Quick summary:
 - **Go 1.22+** required for development. End users do not need Go.
-- Run `go test ./...` before opening a PR.
+- Run `go test ./...` and `go test -race ./...` before opening a PR.
 - Run `gofmt -l .` — must produce no output.
 - Commit format: `<type>(<scope>): <imperative summary>` — e.g. `feat(cli): add hermes-node status subcommand`.
 - Reference the issue / discussion in the PR body.
 - Wire-format changes must update `PROTOCOL.md` in the same commit.
-- All PRs must be reviewed by Quinn (QA) before merge.
 
 ## FAQ
 
