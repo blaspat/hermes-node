@@ -539,7 +539,10 @@ func parseCwdMarker(line, sid string) (string, bool) {
 // is the only safe way to embed a single-quote inside a
 // single-quoted string.
 func escapeSingleQuotes(s string) string {
-	return strings.ReplaceAll(s, "'", `'\\''`)
+	// POSIX single-quote escape: replace each ' with '\'' (close quote,
+	// escaped quote, reopen quote). This produces the 4-character
+	// sequence: ', \, ', '.
+	return strings.ReplaceAll(s, "'", `'\''`)
 }
 
 // randomID returns a hex-encoded n-byte random identifier. Used
