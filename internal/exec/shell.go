@@ -25,10 +25,10 @@
 // avoids the "two readers on one FD lose data" hazard that a naive
 // split would have.
 //
-// Scope note: this is 1.4a — subprocess + framing + basic Run
-// contract. Stderr capture, race tests, and the 10MB output cap are
-// deferred to 1.4b. The Run signature returns ("", "", code, nil)
-// for stderr today; 1.4b will populate it.
+// Stderr is merged into the same pipe as stdout (cmd.Stderr = cmd.Stdout),
+// so both streams arrive interleaved through the same demuxer. The
+// Run signature's stderr return is always empty; stderr content is
+// mixed into the stdout string.
 package exec
 
 import (
@@ -43,12 +43,18 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ErrClosed is returned by Run after Close has been called or the
 // underlying bash process has exited. Callers can use errors.Is to
 // distinguish "session is gone" from genuine command failures.
 var ErrClosed = errors.New("shell: session is closed")
+
+// maxStderrBytes is the cap on accumulated stderr per session. When
+// exceeded, further stderr is silently dropped to prevent OOM. The
+// 10 MB limit matches the existing output cap in handler_exec.go.
+const maxStderrBytes = 10 * 1024 * 1024
 
 // pendingCall is the in-flight state for a single Run. The reader
 // goroutine populates result, then closes done; the Run goroutine
@@ -66,6 +72,7 @@ type pendingCall struct {
 // the END marker (or EOF) for a call.
 type runResult struct {
 	stdout  string
+	stderr  string
 	exitSet bool
 	exit    int
 	cwdSet  bool
@@ -109,6 +116,23 @@ type Session struct {
 	// (nil on a clean shutdown). All in-flight and future calls
 	// observe it and return ErrClosed instead of hanging.
 	readerErr error
+
+	// stderrBuf accumulates all stderr output from the bash
+	// subprocess. The captureStderr goroutine writes to it
+	// continuously; Run reads the delta since the last call.
+	//
+	// LOCK ORDERING: stderrMu must NEVER be acquired while holding
+	// s.mu (captureStderr holds stderrMu while writing). Acquiring
+	// s.mu while holding stderrMu would create a deadlock with any
+	// code path that holds s.mu and then tries to acquire stderrMu.
+	stderrBuf   strings.Builder
+	stderrMu    sync.Mutex
+	stderrPos   int
+
+	// stderrDone is closed when the captureStderr goroutine exits.
+	// Close() waits on it after killing bash to ensure all stderr
+	// has been drained before returning.
+	stderrDone chan struct{}
 }
 
 // NewSession starts a fresh interactive bash and returns a Session
@@ -150,9 +174,11 @@ func NewSession(ctx context.Context) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("shell: stdout pipe: %w", err)
 	}
-	// stderr to /dev/null for 1.4a; 1.4b will route it through
-	// a temp file so callers can see it.
-	cmd.Stderr = io.Discard
+	// stderr is captured via a separate pipe (see captureStderr goroutine).
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("shell: stderr pipe: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("shell: start bash: %w", err)
@@ -165,8 +191,10 @@ func NewSession(ctx context.Context) (*Session, error) {
 		closeCh:  make(chan struct{}),
 		cwd:      initialCwd,
 		pending:  make(map[uint64]*pendingCall),
+		stderrDone: make(chan struct{}),
 	}
 
+	go s.captureStderr(stderr)
 	go s.demux(stdout)
 	return s, nil
 }
@@ -205,6 +233,12 @@ func (s *Session) closeLocked() error {
 	}
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
+		// Wait for the captureStderr goroutine to drain and
+		// exit. A blocked sc.Scan() on a full pipe is freed
+		// once bash is killed (which closes stderr), so this
+		// should complete promptly. The timeout is a safety
+		// net against kernel-level edge cases.
+		waitWithTimeout(s.stderrDone, 5*time.Second)
 		// Wait asynchronously; don't block Close on bash
 		// cleanup.
 		go func() { _ = s.cmd.Wait() }()
@@ -231,10 +265,10 @@ func (s *Session) failPending(why error) {
 }
 
 // Run executes cmd in the persistent bash and returns its captured
-// stdout, the exit code (-1 if no exit was observed), and any
-// transport error. The CWD state of the session is updated as a
-// side effect, so subsequent Run calls observe the same shell the
-// user just typed into.
+// stdout, captured stderr, the exit code (-1 if no exit was
+// observed), and any transport error. The CWD state of the session
+// is updated as a side effect, so subsequent Run calls observe the
+// same shell the user just typed into.
 //
 // The ctx bounds the *waiting* phase (waiting for the END marker),
 // not the bash process itself: bash is bound to whatever context
@@ -242,8 +276,10 @@ func (s *Session) failPending(why error) {
 // timeout should be implemented by the caller wrapping the call
 // site.
 //
-// Stderr is not yet captured (1.4b); the string return is always
-// empty for now.
+// Stderr is captured via a separate goroutine (captureStderr) that
+// writes into a session-level buffer. Run reads the delta produced
+// since the previous call, so stderr is scoped per-command as long
+// as calls are serialized (the mutex guarantees this).
 func (s *Session) Run(ctx context.Context, cmd string) (string, string, int, error) {
 	s.mu.Lock()
 	if s.closed {
@@ -265,6 +301,12 @@ func (s *Session) Run(ctx context.Context, cmd string) (string, string, int, err
 	s.pendingMu.Lock()
 	s.pending[seq] = pc
 	s.pendingMu.Unlock()
+
+	// Save the stderr buffer position before this command runs,
+	// so we can extract only the stderr produced by this call.
+	s.stderrMu.Lock()
+	fromPos := s.stderrPos
+	s.stderrMu.Unlock()
 
 	if _, err := io.WriteString(s.stdin, frame); err != nil {
 		s.pendingMu.Lock()
@@ -303,6 +345,12 @@ func (s *Session) Run(ctx context.Context, cmd string) (string, string, int, err
 		return "", "", -1, res.err
 	}
 
+	// Read the stderr produced since fromPos.
+	s.stderrMu.Lock()
+	stderrContent := s.stderrBuf.String()[fromPos:]
+	s.stderrPos = s.stderrBuf.Len()
+	s.stderrMu.Unlock()
+
 	// Update cached CWD from the marker.
 	if res.cwdSet {
 		s.mu.Lock()
@@ -314,7 +362,7 @@ func (s *Session) Run(ctx context.Context, cmd string) (string, string, int, err
 	if res.exitSet {
 		exitCode = res.exit
 	}
-	return res.stdout, "", exitCode, nil
+	return res.stdout, stderrContent, exitCode, nil
 }
 
 // GetCwd returns the cwd last reported by the CWD marker. Before
@@ -350,6 +398,36 @@ func (s *Session) buildFrame(seq uint64, userCmd string) string {
 	b.WriteString("printf 'EXIT %d\\n' \"$__hermes_ec\"\n")
 	fmt.Fprintf(&b, "printf '%%s%%s%%s\\n' '__HERMES_CWD_%s__' \"$(pwd -P)\" '__HERMES_CWD_%s__'\n", s.id, s.id)
 	return b.String()
+}
+
+// captureStderr is the single-owner reader for bash's stderr. It runs
+// in its own goroutine for the lifetime of the bash process and writes
+// everything bash emits on stderr into the session-level stderrBuf.
+// The Run method reads the delta since the last call after each command
+// completes, so callers receive stderr output scoped to their command.
+//
+// When the buffer exceeds maxStderrBytes, new stderr is silently dropped
+// to prevent OOM. On read error or EOF, the goroutine exits and closes
+// stderrDone so Close() can wait for it.
+func (s *Session) captureStderr(rd io.Reader) {
+	defer close(s.stderrDone)
+
+	sc := bufio.NewScanner(rd)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		s.stderrMu.Lock()
+		// Drop new output if the buffer is already at the cap.
+		if s.stderrBuf.Len() >= maxStderrBytes {
+			s.stderrMu.Unlock()
+			continue
+		}
+		s.stderrBuf.WriteString(sc.Text())
+		s.stderrBuf.WriteByte('\n')
+		s.stderrMu.Unlock()
+	}
+	if err := sc.Err(); err != nil {
+		s.readerErr = err
+	}
 }
 
 // demux is the single-owner reader for bash's stdout. It runs in
@@ -543,6 +621,20 @@ func escapeSingleQuotes(s string) string {
 	// escaped quote, reopen quote). This produces the 4-character
 	// sequence: ', \, ', '.
 	return strings.ReplaceAll(s, "'", `'\''`)
+}
+
+// waitWithTimeout blocks until ch is closed or the timeout elapses,
+// whichever comes first. Returns true if ch was closed (the event
+// completed), false if the timeout fired first.
+func waitWithTimeout(ch <-chan struct{}, timeout time.Duration) bool {
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-ch:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 // randomID returns a hex-encoded n-byte random identifier. Used
