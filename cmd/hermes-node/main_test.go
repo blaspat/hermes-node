@@ -939,6 +939,45 @@ func TestRun_Status_CorruptedFile(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Update subcommand tests
+// ---------------------------------------------------------------------------
+
+func TestRun_Update_HelpInUsage(t *testing.T) {
+	var out bytes.Buffer
+	code := run([]string{"--help"}, &out, &bytes.Buffer{})
+	if code != 0 {
+		t.Fatalf("--help: exit %d", code)
+	}
+	if !strings.Contains(out.String(), "update") {
+		t.Errorf("--help should mention update subcommand; got %q", out.String())
+	}
+}
+
+func TestRun_Update_UnknownFlag(t *testing.T) {
+	var stderr bytes.Buffer
+	code := run([]string{"update", "--bogus"}, &bytes.Buffer{}, &stderr)
+	if code != 2 {
+		t.Errorf("exit = %d, want 2; stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRun_Update_NoNetwork(t *testing.T) {
+	// Tests that update handles a network error gracefully
+	// (instead of panicking or hanging). The default behavior
+	// without --version is to fetch the latest release, which
+	// will fail in a no-network test environment.
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"update", "--yes"}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1 (network failure); stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
+	}
+	// Should mention the repo or a network error.
+	if !strings.Contains(stderr.String(), "blaspat") && !strings.Contains(stderr.String(), "fetch") {
+		t.Errorf("stderr should mention fetch failure; got %q", stderr.String())
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -97,6 +98,7 @@ Usage:
   hermes-node pair --server <wss-url> --token <token> [--config <path>]
   hermes-node run [--config <path>]
   hermes-node status
+  hermes-node update [--version <tag>] [--no-service] [--yes]
   hermes-node uninstall [--purge] [--dry-run]
   hermes-node validate [--config <path>]
   hermes-node --version
@@ -110,6 +112,17 @@ Flags:
   hermes-node status reads the daemon's status file and displays
   the current state, session ID, uptime, and last error. No server
   connection is made.
+
+'update':
+  hermes-node update downloads the latest release binary from
+  GitHub and replaces the running binary. Service registration
+  is not modified unless --restart-service is passed.
+
+  Flags:
+    --version <tag>       update to a specific version (default: latest)
+    --restart-service     re-register the background service (requires
+                          systemctl/launchd)
+    --yes                 skip confirmation prompt
 
 'uninstall':
   hermes-node uninstall removes the binary, stops and removes the
@@ -192,6 +205,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runValidate(subArgs[1:], *configPath, stdout, stderr)
 	case "status":
 		return runStatus(subArgs[1:], stdout, stderr, *configPath)
+	case "update":
+		return runUpdate(subArgs[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "hermes-node: unknown subcommand %q (run 'hermes-node --help')\n", subArgs[0])
 		return 2
@@ -822,6 +837,200 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 		StartedAt: startedAt,
 	}); err != nil {
 		log.Warn("write status file: %v", err)
+	}
+	return 0
+}
+
+// ---- update subcommand ----
+
+const (
+	githubRepo = "blaspat/hermes-nodes"
+	githubAPI  = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
+	githubDL   = "https://github.com/" + githubRepo + "/releases/download"
+)
+
+// httpClient is used for GitHub API and download requests. The
+// timeout prevents indefinite hangs on unreachable networks.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// latestReleaseTag fetches the latest release tag from GitHub API.
+func latestReleaseTag() (string, error) {
+	req, err := http.NewRequest("GET", githubAPI, nil)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("User-Agent", "hermes-node-update/1.0")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch latest release: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetch latest release: HTTP %d", resp.StatusCode)
+	}
+	var rel struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", fmt.Errorf("parse latest release: %w", err)
+	}
+	if rel.TagName == "" {
+		return "", fmt.Errorf("latest release has no tag_name")
+	}
+	return rel.TagName, nil
+}
+
+// runUpdate downloads and replaces the running binary.
+func runUpdate(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("hermes-node update", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	versionFlag := fs.String("version", "", "specific version tag (default: latest)")
+	restartService := fs.Bool("restart-service", false, "re-register the background service after update")
+	assumeYes := fs.Bool("yes", false, "skip confirmation prompt")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	// 1. Determine target version.
+	tag := *versionFlag
+	if tag == "" {
+		fmt.Fprintf(stdout, "looking up latest release of %s ...\n", githubRepo)
+		var err error
+		tag, err = latestReleaseTag()
+		if err != nil {
+			fmt.Fprintf(stderr, "hermes-node: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "latest release: %s\n", tag)
+	}
+
+	// 2. Get current binary path.
+	binPath, err := osExecutable()
+	if err != nil {
+		fmt.Fprintf(stderr, "hermes-node: could not determine binary path: %v\n", err)
+		return 1
+	}
+
+	// 3. Confirm with user unless --yes.
+	if !*assumeYes {
+		fmt.Fprintf(stdout, "this will replace %s with %s. Continue? [y/N] ", binPath, tag)
+		var reply string
+		fmt.Scanln(&reply)
+		if reply != "y" && reply != "Y" && reply != "yes" && reply != "YES" {
+			fmt.Fprintln(stdout, "update cancelled.")
+			return 0
+		}
+	}
+
+	// 4. Download the release binary.
+	assetName := fmt.Sprintf("hermes-node-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		assetName += ".exe"
+	}
+	dlURL := fmt.Sprintf("%s/%s/%s", githubDL, tag, assetName)
+	fmt.Fprintf(stdout, "downloading %s ...\n", dlURL)
+
+	tmpFile, err := os.CreateTemp("", "hermes-node-update-*")
+	if err != nil {
+		fmt.Fprintf(stderr, "hermes-node: create temp file: %v\n", err)
+		return 1
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	req, err := http.NewRequest("GET", dlURL, nil)
+	if err != nil {
+		fmt.Fprintf(stderr, "hermes-node: build download request: %v\n", err)
+		return 1
+	}
+	req.Header.Set("User-Agent", "hermes-node-update/1.0")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(stderr, "hermes-node: download: %v\n", err)
+		return 1
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		fmt.Fprintf(stderr, "hermes-node: download failed: HTTP %d (URL: %s)\n", resp.StatusCode, dlURL)
+		return 1
+	}
+	_, err = io.Copy(tmpFile, resp.Body)
+	resp.Body.Close()
+	tmpFile.Close()
+	if err != nil {
+		fmt.Fprintf(stderr, "hermes-node: write download: %v\n", err)
+		return 1
+	}
+
+	// 5. Verify the downloaded binary is valid.
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(tmpPath, 0o755); err != nil {
+			fmt.Fprintf(stderr, "hermes-node: chmod temp binary: %v\n", err)
+			return 1
+		}
+	}
+	verOut, err := exec.Command(tmpPath, "--version").CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(stderr, "hermes-node: downloaded binary is not a valid hermes-node: %v\n  output: %s\n", err, verOut)
+		return 1
+	}
+	fmt.Fprintf(stdout, "downloaded: %s", verOut)
+
+	// 6. Replace the running binary.
+	if runtime.GOOS == "windows" {
+		fmt.Fprintf(stderr, "hermes-node: cannot replace a running binary on Windows. Copy %s to %s manually.\n", tmpPath, binPath)
+		return 1
+	}
+	if err := os.Rename(tmpPath, binPath); err != nil {
+		if errors.Is(err, syscall.EXDEV) {
+			fmt.Fprintf(stderr, "hermes-node: temp file is on a different filesystem than %s.\n", binPath)
+			fmt.Fprintf(stderr, "  Run: cp %s %s && chmod +x %s\n", tmpPath, binPath, binPath)
+		} else {
+			fmt.Fprintf(stderr, "hermes-node: replace binary %s: %v\n", binPath, err)
+		}
+		return 1
+	}
+	fmt.Fprintf(stdout, "replaced: %s\n", binPath)
+
+	// 7. Optionally re-register the service.
+	restartFailed := false
+	if *restartService {
+		switch runtime.GOOS {
+		case "linux":
+			if commandExists("systemctl") {
+				fmt.Fprintf(stdout, "restarting systemd user service ...\n")
+				if err := exec.Command("systemctl", "--user", "daemon-reload").Run(); err != nil {
+					fmt.Fprintf(stderr, "hermes-node: daemon-reload: %v\n", err)
+					restartFailed = true
+				}
+				if err := exec.Command("systemctl", "--user", "restart", "hermes-node.service").Run(); err != nil {
+					fmt.Fprintf(stderr, "hermes-node: restart service: %v\n", err)
+					restartFailed = true
+				}
+			}
+		case "darwin":
+			if commandExists("launchctl") {
+				fmt.Fprintf(stdout, "restarting launchd agent ...\n")
+				label := "com.blaspat.hermes-node"
+				plist := filepath.Join(os.Getenv("HOME"), "Library", "LaunchAgents", label+".plist")
+				if err := exec.Command("launchctl", "unload", plist).Run(); err != nil {
+					fmt.Fprintf(stderr, "hermes-node: launchctl unload: %v\n", err)
+					restartFailed = true
+				}
+				if err := exec.Command("launchctl", "load", plist).Run(); err != nil {
+					fmt.Fprintf(stderr, "hermes-node: launchctl load: %v\n", err)
+					restartFailed = true
+				}
+			}
+		}
+	}
+	if restartFailed {
+		fmt.Fprintf(stderr, "hermes-node: service restart failed — the binary was updated but the service was not restarted.\n")
+	}
+
+	fmt.Fprintf(stdout, "update complete. Restart the daemon or reboot to pick up the new binary.\n")
+	if restartFailed {
+		return 1
 	}
 	return 0
 }
