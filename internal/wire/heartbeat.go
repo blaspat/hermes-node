@@ -1,8 +1,6 @@
 // Package wire: heartbeat (Task 1.9). PROTOCOL.md §6 says every 30s
 // either side may send a `ping`; if no `pong` (or any other message)
 // is received within 60s, the connection is considered dead.
-//
-// ... (header comment unchanged) ...
 package wire
 
 import (
