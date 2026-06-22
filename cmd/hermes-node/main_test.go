@@ -450,8 +450,100 @@ func TestRun_ConnectsToServer(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// helpers
+// Uninstall subcommand tests
 // ---------------------------------------------------------------------------
+
+func TestRun_Uninstall_NothingToDo(t *testing.T) {
+	// Override osExecutable so the binary path is a non-existent file.
+	orig := osExecutable
+	osExecutable = func() (string, error) { return "/tmp/hermes-node-nonexistent", nil }
+	defer func() { osExecutable = orig }()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"uninstall"}, &stdout, &stderr)
+	if code != 0 {
+		t.Errorf("exit = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "nothing to uninstall") {
+		t.Errorf("stdout should mention 'nothing to uninstall'; got %q", stdout.String())
+	}
+}
+
+func TestRun_Uninstall_RemovesBinary(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "hermes-node")
+	if err := os.WriteFile(binPath, []byte("fake binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := osExecutable
+	osExecutable = func() (string, error) { return binPath, nil }
+	defer func() { osExecutable = orig }()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"uninstall"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "removed binary") {
+		t.Errorf("stdout should mention 'removed binary'; got %q", stdout.String())
+	}
+	if _, err := os.Stat(binPath); !os.IsNotExist(err) {
+		t.Errorf("binary should be removed; stat err = %v", err)
+	}
+}
+
+func TestRun_Uninstall_WithPurge(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "hermes-node")
+	configDir := filepath.Join(dir, ".hermes-nodes")
+	if err := os.WriteFile(binPath, []byte("fake binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	origExec := osExecutable
+	osExecutable = func() (string, error) { return binPath, nil }
+	defer func() { osExecutable = origExec }()
+
+	// Override defaultConfigPath so it uses our temp config dir.
+	// Since runUninstall computes configDir from UserHomeDir,
+	// this test is limited. We verify --purge flag parsing works.
+	origHome := osUserHomeDir
+	osUserHomeDir = func() (string, error) { return dir, nil }
+	defer func() { osUserHomeDir = origHome }()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"uninstall", "--purge"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%q", code, stderr.String())
+	}
+	// Binary should be removed.
+	if _, err := os.Stat(binPath); !os.IsNotExist(err) {
+		t.Errorf("binary should be removed; stat err = %v", err)
+	}
+}
+
+func TestRun_Uninstall_HelpInUsage(t *testing.T) {
+	var out bytes.Buffer
+	code := run([]string{"--help"}, &out, &bytes.Buffer{})
+	if code != 0 {
+		t.Fatalf("--help: exit %d", code)
+	}
+	if !strings.Contains(out.String(), "uninstall") {
+		t.Errorf("--help should mention uninstall subcommand; got %q", out.String())
+	}
+}
+
+func TestRun_Uninstall_UnknownFlag(t *testing.T) {
+	var stderr bytes.Buffer
+	code := run([]string{"uninstall", "--bogus"}, &bytes.Buffer{}, &stderr)
+	if code != 2 {
+		t.Errorf("exit = %d, want 2; stderr=%q", code, stderr.String())
+	}
+}
 
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -40,17 +41,28 @@ import (
 // source, not a tagged release.
 var version = "dev"
 
+// osExecutable is a variable so tests can override it.
+var osExecutable = os.Executable
+
+// osUserHomeDir is a variable so tests can override it.
+var osUserHomeDir = os.UserHomeDir
+
 const usage = `hermes-node — pair a laptop with a Hermes Agent brain
 
 Usage:
   hermes-node pair --server <wss-url> --token <token> [--config <path>]
   hermes-node run [--config <path>]
+  hermes-node uninstall [--purge]
   hermes-node --version
   hermes-node --help
 
 Flags:
   --config <path>   load/save config from this path
                     (default: ~/.hermes-nodes/config.toml)
+
+'hermes-node uninstall' removes the binary, stops and removes the
+background service (systemd/launchd), and leaves the config directory
+in place. Add --purge to also remove ~/.hermes-nodes/.
 
 After pairing, run the node as a background service. See README.md for
 the install and pair flows.
@@ -105,6 +117,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPair(subArgs[1:], *configPath, stdout, stderr)
 	case "run":
 		return runRunWithSignalCtx(*configPath, stdout, stderr)
+	case "uninstall":
+		return runUninstall(subArgs[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "hermes-node: unknown subcommand %q (run 'hermes-node --help')\n", subArgs[0])
 		return 2
@@ -248,6 +262,128 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "\n")
 	fmt.Fprintf(stdout, "  Then start the service: hermes-node run\n")
 	return 0
+}
+
+// runUninstall removes the binary, stops and deregisters the background
+// service, and optionally removes the config directory.
+//
+// Flags:
+//
+//	--purge   also remove ~/.hermes-nodes/ (config, audit log, tokens)
+func runUninstall(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("hermes-node uninstall", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	purge := fs.Bool("purge", false, "also remove config directory (~/.hermes-nodes)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	home, err := osUserHomeDir()
+	if err != nil {
+		fmt.Fprintln(stderr, "hermes-node: could not determine home directory:", err)
+		return 1
+	}
+
+	binPath, err := osExecutable()
+	if err != nil {
+		// Fallback to default install location.
+		binPath = filepath.Join(home, ".local", "bin", "hermes-node")
+	}
+	configDir := filepath.Join(home, ".hermes-nodes")
+	removed := 0
+	errors_ := 0
+
+	// ---- service removal (per OS) ----
+	switch runtime.GOOS {
+	case "linux":
+		serviceDir := filepath.Join(home, ".config", "systemd", "user")
+		serviceFile := filepath.Join(serviceDir, "hermes-node.service")
+		if _, err := os.Stat(serviceFile); err == nil {
+			// Try to disable + stop the service first.
+			if commandExists("systemctl") {
+				cmd := exec.Command("systemctl", "--user", "disable", "--now", "hermes-node.service")
+				cmd.Stderr = stderr
+				if err := cmd.Run(); err != nil {
+					fmt.Fprintf(stderr, "hermes-node: warning: systemctl disable/stop failed: %v\n", err)
+				}
+			}
+			if err := os.Remove(serviceFile); err != nil {
+				fmt.Fprintf(stderr, "hermes-node: remove service file %s: %v\n", serviceFile, err)
+				errors_++
+			} else {
+				fmt.Fprintf(stdout, "removed service: %s\n", serviceFile)
+				removed++
+			}
+		}
+	case "darwin":
+		label := "com.blaspat.hermes-node"
+		serviceFile := filepath.Join(home, "Library", "LaunchAgents", label+".plist")
+		if _, err := os.Stat(serviceFile); err == nil {
+			// Unload the agent.
+			if commandExists("launchctl") {
+				cmd := exec.Command("launchctl", "unload", serviceFile)
+				cmd.Stderr = stderr
+				_ = cmd.Run() // best-effort; may fail if already unloaded
+			}
+			if err := os.Remove(serviceFile); err != nil {
+				fmt.Fprintf(stderr, "hermes-node: remove service file %s: %v\n", serviceFile, err)
+				errors_++
+			} else {
+				fmt.Fprintf(stdout, "removed service: %s\n", serviceFile)
+				removed++
+			}
+		}
+	default:
+		// Windows and other platforms: no service removal logic yet.
+		// The PowerShell installer handles task-scheduler uninstall.
+	}
+
+	// ---- binary removal ----
+	if _, err := os.Stat(binPath); err == nil {
+		if err := os.Remove(binPath); err != nil {
+			fmt.Fprintf(stderr, "hermes-node: remove binary %s: %v\n", binPath, err)
+			errors_++
+		} else {
+			fmt.Fprintf(stdout, "removed binary: %s\n", binPath)
+			removed++
+		}
+	}
+
+	// ---- config dir removal (only with --purge) ----
+	if *purge {
+		if _, err := os.Stat(configDir); err == nil {
+			if err := os.RemoveAll(configDir); err != nil {
+				fmt.Fprintf(stderr, "hermes-node: remove config dir %s: %v\n", configDir, err)
+				errors_++
+			} else {
+				fmt.Fprintf(stdout, "removed config directory: %s\n", configDir)
+				removed++
+			}
+		}
+	}
+
+	if removed == 0 && errors_ == 0 {
+		fmt.Fprintln(stdout, "nothing to uninstall — no binary, service, or config found.")
+	} else if errors_ == 0 {
+		fmt.Fprintln(stdout, "uninstall complete.")
+	} else {
+		fmt.Fprintf(stdout, "uninstall finished with %d error(s).\n", errors_)
+	}
+
+	if !*purge {
+		fmt.Fprintf(stdout, "config directory left in place: %s (pass --purge to remove)\n", configDir)
+	}
+
+	if errors_ > 0 {
+		return 1
+	}
+	return 0
+}
+
+// commandExists reports whether an executable is on PATH.
+func commandExists(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
 }
 
 // runRun is the long-lived service. It blocks until ctx is cancelled
@@ -407,7 +543,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 // resolve to the current working directory and confuse the
 // operator with a "file not found" error whose path is a lie.
 func defaultConfigPath() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := osUserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("could not determine home directory for default config path: %w", err)
 	}
