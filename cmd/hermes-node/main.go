@@ -95,6 +95,7 @@ Usage:
   hermes-node pair --server <wss-url> --token <token> [--config <path>]
   hermes-node run [--config <path>]
   hermes-node uninstall [--purge] [--dry-run]
+  hermes-node validate [--config <path>]
   hermes-node --version
   hermes-node --help
 
@@ -108,6 +109,17 @@ Flags:
   in place. Add --purge to also remove ~/.hermes-nodes/ (all config,
   tokens, and audit logs). Use --dry-run to preview what would be
   removed without making changes.
+
+'validate':
+  hermes-node validate parses config.toml, checks required fields,
+  verifies allowed_paths exist and are accessible, validates TLS
+  settings, and confirms the log path is writable. No server
+  connection is made.
+
+  Exit codes:
+    0 — all checks passed
+    1 — one or more validation failures
+    2 — flag/argument error or config file not found
 
 After pairing, run the node as a background service. See README.md for
 the install and pair flows.
@@ -168,6 +180,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runRunWithSignalCtx(*configPath, stdout, stderr)
 	case "uninstall":
 		return runUninstall(subArgs[1:], stdout, stderr)
+	case "validate":
+		return runValidate(subArgs[1:], *configPath, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "hermes-node: unknown subcommand %q (run 'hermes-node --help')\n", subArgs[0])
 		return 2
@@ -486,6 +500,116 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 func commandExists(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
+}
+
+// runValidate parses config.toml and validates its contents without
+// connecting to the server. Checks:
+//   - TOML syntax and required fields (via config.Load)
+//   - allowed_paths exist and are accessible
+//   - Log path parent directory is writable
+//   - TLS ca_cert file exists (if set)
+//   - TLS pinned_cert_sha256 is valid hex (if set via config.BuildTLSConfig)
+func runValidate(args []string, configPath string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("hermes-node validate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	// Check the file exists before loading, so we can distinguish
+	// "wrong path" (exit 2) from "config has content errors" (exit 1).
+	if _, err := os.Stat(configPath); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(stderr, "hermes-node: config file not found: %s\n", configPath)
+			return 2
+		}
+		fmt.Fprintf(stderr, "hermes-node: config file error: %v\n", err)
+		return 2
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "hermes-node: config validation failed: %v\n", err)
+		return 1
+	}
+
+	passed := 0
+	failed := 0
+
+	fmt.Fprintf(stdout, "validating %s ...\n", configPath)
+
+	// 1. Required fields — config.Load already validated these, so
+	//    if we got here they're fine.
+	fmt.Fprintf(stdout, "  [OK] required fields: server_url, name, token\n")
+	passed++
+
+	// 2. allowed_paths — each must exist and be a directory. This
+	//    check is point-in-time: a path that exists now may be
+	//    removed later. The filesystem handler re-checks at runtime.
+	if len(cfg.Node.AllowedPaths) == 0 {
+		fmt.Fprintf(stdout, "  [WARN] allowed_paths is empty — all filesystem calls will be rejected\n")
+	} else {
+		allOK := true
+		for _, p := range cfg.Node.AllowedPaths {
+			info, err := os.Stat(p)
+			if err != nil {
+				fmt.Fprintf(stdout, "  [FAIL] allowed_path %s: %v\n", p, err)
+				failed++
+				allOK = false
+			} else if !info.IsDir() {
+				fmt.Fprintf(stdout, "  [FAIL] allowed_path %s: not a directory\n", p)
+				failed++
+				allOK = false
+			}
+		}
+		if allOK {
+			fmt.Fprintf(stdout, "  [OK] allowed_paths (%d paths)\n", len(cfg.Node.AllowedPaths))
+			passed++
+		}
+	}
+
+	// 3. Log path — check parent dir is writable.
+	logDir := filepath.Dir(cfg.Node.LogPath)
+	info, err := os.Stat(logDir)
+	if err != nil {
+		fmt.Fprintf(stdout, "  [FAIL] log directory %s: %v\n", logDir, err)
+		failed++
+	} else if !info.IsDir() {
+		fmt.Fprintf(stdout, "  [FAIL] log path %s: parent %s is not a directory\n", cfg.Node.LogPath, logDir)
+		failed++
+	} else {
+		// Check writability by creating and removing a temp dir.
+		// Using MkdirTemp avoids leaving an orphan file on SIGKILL.
+		tmpDir, err := os.MkdirTemp(logDir, "hermes-node-validate-*")
+		if err != nil {
+			fmt.Fprintf(stdout, "  [FAIL] log directory %s: not writable: %v\n", logDir, err)
+			failed++
+		} else {
+			os.Remove(tmpDir)
+			fmt.Fprintf(stdout, "  [OK] log path: %s\n", cfg.Node.LogPath)
+			passed++
+		}
+	}
+
+	// 4. TLS settings — config.BuildTLSConfig validates ca_cert
+	//    and pinned_cert_sha256 together.
+	tlsSet := cfg.Server.CACert != "" || cfg.Server.PinnedCertSHA256 != ""
+	_, err = config.BuildTLSConfig(cfg.Server)
+	if err != nil {
+		fmt.Fprintf(stdout, "  [FAIL] TLS config: %v\n", err)
+		failed++
+	} else if tlsSet {
+		fmt.Fprintf(stdout, "  [OK] TLS config\n")
+		passed++
+	}
+	// If no TLS settings are configured, that's fine — no check needed.
+
+	if failed == 0 {
+		fmt.Fprintf(stdout, "\nhermes-node: config is valid (%d checks passed).\n", passed)
+		return 0
+	}
+	fmt.Fprintf(stdout, "\nhermes-node: config has %d error(s), %d check(s) passed.\n", failed, passed)
+	return 1
 }
 
 // runRun is the long-lived service. It blocks until ctx is cancelled
