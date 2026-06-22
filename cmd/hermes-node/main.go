@@ -42,6 +42,47 @@ import (
 // source, not a tagged release.
 var version = "dev"
 
+// buildMetadata is populated from debug.ReadBuildInfo on init. It
+// carries the Go version, VCS commit SHA, and commit timestamp so
+// operators can identify exactly which build is running.
+var buildMetadata string
+
+func init() {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		var goVer, revision, commitTime, dirty string
+		goVer = info.GoVersion
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				revision = s.Value
+			case "vcs.time":
+				commitTime = s.Value
+			case "vcs.modified":
+				if s.Value == "true" {
+					dirty = "-dirty"
+				}
+			}
+		}
+		parts := version
+		if goVer != "" {
+			parts += " " + goVer
+		}
+		if revision != "" {
+			parts += " " + revision[:min(8, len(revision))] + dirty
+		}
+		if commitTime != "" {
+			// Trim to date-only for conciseness.
+			if len(commitTime) > 10 {
+				commitTime = commitTime[:10]
+			}
+			parts += " " + commitTime
+		}
+		buildMetadata = parts
+	}
+	// If ReadBuildInfo failed (unlikely), buildMetadata stays empty
+	// and --version falls back to the simple format.
+}
+
 // osExecutable is a variable so tests can override it.
 var osExecutable = os.Executable
 
@@ -93,7 +134,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *showVersion {
-		fmt.Fprintf(stdout, "hermes-node %s\n", version)
+		if buildMetadata != "" {
+			fmt.Fprintf(stdout, "hermes-node %s\n", buildMetadata)
+		} else {
+			fmt.Fprintf(stdout, "hermes-node %s\n", version)
+		}
 		return 0
 	}
 	if *showHelp {

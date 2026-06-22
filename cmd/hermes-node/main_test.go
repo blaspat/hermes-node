@@ -224,11 +224,21 @@ func TestRun_NoSubcommand(t *testing.T) {
 
 func TestRun_VersionAndHelp(t *testing.T) {
 	var out bytes.Buffer
-	if code := run([]string{"--version"}, &out, &bytes.Buffer{}); code != 0 {
-		t.Errorf("--version: exit %d", code)
+	code := run([]string{"--version"}, &out, &bytes.Buffer{})
+	if code != 0 {
+		t.Errorf("--version: exit %d, want 0", code)
 	}
 	if !strings.HasPrefix(out.String(), "hermes-node ") {
 		t.Errorf("--version: output = %q, want 'hermes-node ...' prefix", out.String())
+	}
+	// With build info (from debug.ReadBuildInfo), output should be:
+	// "hermes-node dev go1.22.5 abc1234 2026-06-22"
+	// Without build info (test binary built without VCS), just:
+	// "hermes-node dev"
+	// Either is fine — just check it's not empty after the prefix.
+	rest := strings.TrimSpace(strings.TrimPrefix(out.String(), "hermes-node "))
+	if rest == "" {
+		t.Errorf("--version: version string after prefix is empty: %q", out.String())
 	}
 
 	out.Reset()
@@ -237,6 +247,44 @@ func TestRun_VersionAndHelp(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "hermes-node pair") {
 		t.Errorf("--help: should mention pair subcommand; got %q", out.String())
+	}
+}
+
+// TestBuildMetadataFormat verifies the buildMetadata string is formatted
+// correctly when debug.ReadBuildInfo provides VCS settings.
+func TestBuildMetadataFormat(t *testing.T) {
+	// Save and override buildMetadata so the test is deterministic.
+	saved := buildMetadata
+	defer func() { buildMetadata = saved }()
+
+	buildMetadata = "dev go1.22.5 abc1234 2026-06-22"
+	var out bytes.Buffer
+	code := run([]string{"--version"}, &out, &bytes.Buffer{})
+	if code != 0 {
+		t.Fatalf("--version: exit %d", code)
+	}
+	want := "hermes-node dev go1.22.5 abc1234 2026-06-22\n"
+	if out.String() != want {
+		t.Errorf("--version output: got %q, want %q", out.String(), want)
+	}
+}
+
+// TestVersionFallbackFormat verifies that --version falls back to the
+// bare version string when buildMetadata is empty (e.g. ReadBuildInfo
+// failed or returned no VCS settings).
+func TestVersionFallbackFormat(t *testing.T) {
+	saved := buildMetadata
+	defer func() { buildMetadata = saved }()
+
+	buildMetadata = ""
+	var out bytes.Buffer
+	code := run([]string{"--version"}, &out, &bytes.Buffer{})
+	if code != 0 {
+		t.Fatalf("--version: exit %d", code)
+	}
+	want := "hermes-node dev\n"
+	if out.String() != want {
+		t.Errorf("--version output: got %q, want %q", out.String(), want)
 	}
 }
 
