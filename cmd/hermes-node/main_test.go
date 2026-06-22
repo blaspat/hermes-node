@@ -744,6 +744,102 @@ func TestRun_Validate_UnknownFlag(t *testing.T) {
 	}
 }
 
+func TestRun_Validate_FileNotFound(t *testing.T) {
+	var stderr bytes.Buffer
+	code := run([]string{"validate", "--config", "/nonexistent/hermes-node/config.toml"}, &bytes.Buffer{}, &stderr)
+	if code != 2 {
+		t.Errorf("exit = %d, want 2; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "not found") {
+		t.Errorf("stderr should mention 'not found'; got %q", stderr.String())
+	}
+}
+
+func TestRun_Validate_EmptyAllowedPaths(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	logDir := filepath.Join(dir, "logs")
+	os.MkdirAll(logDir, 0o755)
+	contents := `
+[node]
+server_url = "wss://vps.example.com:6969"
+name = "test-node"
+token = "test-token"
+allowed_paths = []
+log_path = "` + filepath.Join(logDir, "audit.log") + `"
+`
+	if err := os.WriteFile(cfgPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"validate", "--config", cfgPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d; stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "WARN") {
+		t.Errorf("stdout should contain a WARN about empty allowed_paths; got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "config is valid") {
+		t.Errorf("stdout should mention 'config is valid'; got %q", stdout.String())
+	}
+}
+
+func TestRun_Validate_NonDirectoryAllowedPath(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	logDir := filepath.Join(dir, "logs")
+	os.MkdirAll(logDir, 0o755)
+	// Create a file to use as a non-directory allowed_path.
+	filePath := filepath.Join(dir, "not-a-dir")
+	os.WriteFile(filePath, []byte("x"), 0o644)
+	contents := `
+[node]
+server_url = "wss://vps.example.com:6969"
+name = "test-node"
+token = "test-token"
+allowed_paths = ["` + filePath + `"]
+log_path = "` + filepath.Join(logDir, "audit.log") + `"
+`
+	if err := os.WriteFile(cfgPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"validate", "--config", cfgPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1; stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "not a directory") {
+		t.Errorf("stdout should mention 'not a directory'; got %q", stdout.String())
+	}
+}
+
+func TestRun_Validate_NonExistentLogDir(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	contents := `
+[node]
+server_url = "wss://vps.example.com:6969"
+name = "test-node"
+token = "test-token"
+allowed_paths = ["/tmp"]
+log_path = "` + filepath.Join(dir, "nonexistent", "audit.log") + `"
+`
+	if err := os.WriteFile(cfgPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"validate", "--config", cfgPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1; stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "FAIL") {
+		t.Errorf("stdout should contain FAIL for missing log dir; got %q", stdout.String())
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
