@@ -353,6 +353,15 @@ func TestBackoffInitialDuration_Invalid(t *testing.T) {
 	}
 }
 
+func TestBackoffInitialDuration_ZeroOrNegative(t *testing.T) {
+	for _, input := range []string{"0s", "-1s"} {
+		n := NodeConfig{BackoffInitial: input}
+		if d := n.BackoffInitialDuration(); d != time.Second {
+			t.Errorf("BackoffInitial=%q: got %v, want 1s", input, d)
+		}
+	}
+}
+
 func TestBackoffMaxDuration_Defaults(t *testing.T) {
 	var n NodeConfig
 	if d := n.BackoffMaxDuration(); d != 60*time.Second {
