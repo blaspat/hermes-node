@@ -671,6 +671,79 @@ func TestRun_Uninstall_UnknownFlag(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Validate subcommand tests
+// ---------------------------------------------------------------------------
+
+func TestRun_Validate_ValidConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	logDir := filepath.Join(dir, "logs")
+	os.MkdirAll(logDir, 0o755)
+	contents := `
+[node]
+server_url = "wss://vps.example.com:6969"
+name = "test-node"
+token = "test-token"
+allowed_paths = ["/tmp"]
+log_path = "` + filepath.Join(logDir, "audit.log") + `"
+`
+	if err := os.WriteFile(cfgPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"validate", "--config", cfgPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d; stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "config is valid") {
+		t.Errorf("stdout should mention 'config is valid'; got %q", stdout.String())
+	}
+}
+
+func TestRun_Validate_InvalidConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	contents := `
+[node]
+name = "test-node"
+token = "test-token"
+`
+	// Missing server_url — config.Load should fail.
+	if err := os.WriteFile(cfgPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	code := run([]string{"validate", "--config", cfgPath}, &bytes.Buffer{}, &stderr)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "server_url") {
+		t.Errorf("stderr should mention missing server_url; got %q", stderr.String())
+	}
+}
+
+func TestRun_Validate_HelpInUsage(t *testing.T) {
+	var out bytes.Buffer
+	code := run([]string{"--help"}, &out, &bytes.Buffer{})
+	if code != 0 {
+		t.Fatalf("--help: exit %d", code)
+	}
+	if !strings.Contains(out.String(), "validate") {
+		t.Errorf("--help should mention validate subcommand; got %q", out.String())
+	}
+}
+
+func TestRun_Validate_UnknownFlag(t *testing.T) {
+	var stderr bytes.Buffer
+	code := run([]string{"validate", "--bogus"}, &bytes.Buffer{}, &stderr)
+	if code != 2 {
+		t.Errorf("exit = %d, want 2; stderr=%q", code, stderr.String())
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
