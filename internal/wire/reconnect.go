@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"time"
 
@@ -254,6 +255,8 @@ func (s *Supervisor) auditReconnect(reason error) {
 	if err := s.opts.AuditLog.Write(entry); err != nil {
 		if s.opts.Logger != nil {
 			s.opts.Logger.Warn("wire: audit reconnect entry failed: %v", err)
+		} else {
+			log.Printf("wire: audit reconnect entry failed: %v", err)
 		}
 	}
 }
