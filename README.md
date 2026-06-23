@@ -63,16 +63,18 @@ Requires Go 1.22+.
 
 ### Binary matrix
 
-| OS      | Arch   | Binary name                     | Status         |
-|---------|--------|---------------------------------|----------------|
-| Linux   | amd64  | `hermes-node-linux-amd64`       | ✅ Confirmed   |
-| Linux   | arm64  | `hermes-node-linux-arm64`       | 🏗️ Build only |
-| macOS   | amd64  | `hermes-node-darwin-amd64`      | ✅ Confirmed   |
-| macOS   | arm64  | `hermes-node-darwin-arm64`      | ✅ Confirmed   |
-| Windows | amd64  | `hermes-node-windows-amd64.exe` | 🏗️ Build only |
-| Windows | arm64  | `hermes-node-windows-arm64.exe` | 🏗️ Build only |
+The `scripts/build.sh` script cross-compiles for these targets:
 
-> **🏗️ Build only** — cross-compiles successfully but not end-to-end tested. Linux amd64 and macOS amd64 are the confirmed platforms. Windows requires WSL or Git Bash for the shell executor.
+| OS      | Arch   | Binary name                     |
+|---------|--------|---------------------------------|
+| Linux   | amd64  | `hermes-node-linux-amd64`       |
+| Linux   | arm64  | `hermes-node-linux-arm64`       |
+| macOS   | amd64  | `hermes-node-darwin-amd64`      |
+| macOS   | arm64  | `hermes-node-darwin-arm64`      |
+| Windows | amd64  | `hermes-node-windows-amd64.exe` |
+| Windows | arm64  | `hermes-node-windows-arm64.exe` |
+
+**Confirmed platforms:** Linux (amd64) and macOS (amd64 + arm64). Windows builds but is not yet end-to-end tested (requires WSL or Git Bash for the shell executor).
 
 ## Subcommands
 
