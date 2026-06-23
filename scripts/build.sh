@@ -11,7 +11,10 @@
 #   windows/amd64, windows/arm64
 #
 # Usage:
-#   ./scripts/build.sh
+#   ./scripts/build.sh [<version>]
+#
+# When <version> is provided, it is injected via -ldflags -X main.version.
+# When omitted, the binary defaults to "dev" (see cmd/hermes-node/main.go).
 #
 # Requirements: Go toolchain on PATH (cross-compile is automatic — no CGO needed).
 
@@ -28,6 +31,14 @@ BINARY="hermes-node"
 # Disable CGO so the output is a static binary (no glibc/Musl linkage surprises
 # across distros). CGO_ENABLED=0 is the standard Go way to get a portable build.
 export CGO_ENABLED=0
+
+# Version string. When a tag is passed as the first argument, inject it.
+# Otherwise the binary falls back to the "dev" default in main.go.
+VERSION="${1:-}"
+LDFLAGS="-s -w"
+if [ -n "$VERSION" ]; then
+  LDFLAGS="$LDFLAGS -X main.version=$VERSION"
+fi
 
 # Targets: space-separated "GOOS/GOARCH" pairs.
 TARGETS=(
@@ -55,7 +66,7 @@ for target in "${TARGETS[@]}"; do
   echo "==> building $target -> ${out#$REPO_ROOT/}"
   GOOS="$GOOS" GOARCH="$GOARCH" go build \
     -trimpath \
-    -ldflags "-s -w" \
+    -ldflags "$LDFLAGS" \
     -o "$out" \
     ./cmd/hermes-node
 done
