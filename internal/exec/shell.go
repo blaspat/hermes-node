@@ -426,7 +426,10 @@ func (s *Session) captureStderr(rd io.Reader) {
 		s.stderrMu.Unlock()
 	}
 	if err := sc.Err(); err != nil {
-		s.readerErr = err
+		// Read error on stderr is not fatal — the stdout pipe may
+		// still be healthy. The goroutine exits and stderr capture
+		// stops, but the session continues to service exec calls
+		// using whatever stderr was captured so far.
 	}
 }
 
