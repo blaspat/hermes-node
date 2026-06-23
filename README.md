@@ -18,8 +18,9 @@
 ## Quick Start
 
 ```bash
-# Install the binary
-curl -sSL https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.sh | sh
+# Install with Homebrew (macOS / Linux)
+brew tap blaspat/hermes-node
+brew install hermes-node
 
 # Pair with your Hermes brain
 hermes-node pair --server wss://vps.yourdomain.com:7000 --token <TOKEN> --name work-laptop
@@ -33,23 +34,28 @@ hermes-node run
 
 ## Installation
 
-### Install the binary
+### Recommended: Homebrew (macOS / Linux)
 
 ```bash
-# macOS / Linux
-curl -sSL https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.sh | sh
-
-# Windows (PowerShell)
-irm https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.ps1 | iex
+brew tap blaspat/hermes-node
+brew install hermes-node
 ```
 
-Both installers:
-- Download the latest release binary for your OS/arch
-- Drop it in `~/.local/bin/hermes-node` (or `%LOCALAPPDATA%\Programs\hermes-node\` on Windows)
-- Register it as a background service (launchd / systemd --user / Task Scheduler)
-- Print next-step instructions for pairing with your Hermes brain
+Binaries are built from source by Homebrew — no antivirus false positives.
 
-**No admin rights required. One static binary.**
+### Alternative: curl install (macOS / Linux)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.sh | sh
+```
+
+Builds from source using the latest release tag. Add `--no-service` to skip background service registration.
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.ps1 | iex
+```
 
 ### Build from source
 
