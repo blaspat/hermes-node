@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   release:
@@ -53,10 +54,12 @@ jobs:
             end
           end
           EOF
-      - name: Commit and push
-        run: |
-          git config user.name "blaspat"
-          git config user.email "blasius.patrick@gmail.com"
-          git add -A
-          git commit -m "Update Homebrew formula to ${{ github.ref_name }}"
-          git push
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Update Homebrew formula to ${{ github.ref_name }}"
+          branch: "auto/update-formula-${{ github.ref_name }}"
+          title: "Update Homebrew formula to ${{ github.ref_name }}"
+          body: "Automated update of Formula/hermes-node.rb for release ${{ github.ref_name }}."
+          base: main
