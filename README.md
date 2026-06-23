@@ -34,30 +34,29 @@ hermes-node run
 
 ## Installation
 
-### Recommended: Homebrew (macOS / Linux)
+### Option 1: Homebrew (macOS / Linux) — recommended
 
 ```bash
 brew tap blaspat/hermes-node
 brew install hermes-node
 ```
 
-Binaries are built from source by Homebrew — no antivirus false positives.
+Builds from source. No antivirus false positives.
 
-### Alternative: curl install (macOS / Linux)
+### Option 2: GitHub release (macOS / Linux / Windows)
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.sh | sh
 ```
 
-Builds from source using the latest release tag. Add `--no-service` to skip background service registration.
+Builds from source using the latest release tag. Add `--no-service` to skip service registration.
 
-### Windows (PowerShell)
-
+Windows:
 ```powershell
 irm https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.ps1 | iex
 ```
 
-### Build from source
+### Option 3: Build from source
 
 ```bash
 git clone https://github.com/blaspat/hermes-nodes.git
