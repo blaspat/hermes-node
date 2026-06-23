@@ -163,8 +163,21 @@ func TestRunCapturesExitCode(t *testing.T) {
 // TestRunCapturesStderr verifies that stderr output from a command
 // is captured and returned in the second return value. Previously
 // stderr was silently discarded (cmd.Stderr = io.Discard).
+//
+// The first Run on a fresh session may inherit bash startup noise on
+// stderr (e.g. "cannot set terminal process group" on CI runners
+// without a PTY). To keep the test deterministic we flush that noise
+// with a silent command before the actual assertion.
 func TestRunCapturesStderr(t *testing.T) {
 	s := newTestSession(t)
+
+	// Flush bash startup messages from the stderr buffer. On some
+	// CI environments bash -i emits startup warnings to stderr; a
+	// no-op command ensures the next Run starts with a clean slate.
+	_, _, _, err := s.Run(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("flush run: %v", err)
+	}
 
 	stdout, stderr, code, err := s.Run(context.Background(), "echo stdout; echo stderr >&2")
 	if err != nil {
