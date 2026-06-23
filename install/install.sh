@@ -377,9 +377,44 @@ do_install() {
     fi
   else
     # --- build from source (default) ------------------------------------
-    log "building $VERSION from source"
+    # If Go is not available, fall back to downloading the pre-built binary.
+    if ! command -v go >/dev/null 2>&1; then
+      log "Go not found on PATH — falling back to pre-built binary"
+      BINARY_DOWNLOAD=1
+    else
+      go_version="$(go version 2>/dev/null | awk '{print $3}')"
+      case "$go_version" in
+        go1.2[2-9]*|go1.[3-9]*|go[2-9]*) ;;  # 1.22+
+        *)
+          log "Go $go_version is too old (need 1.22+) — falling back to pre-built binary"
+          BINARY_DOWNLOAD=1
+          ;;
+      esac
+    fi
 
-    if [ "$DRY_RUN" = 1 ]; then
+    if [ "$BINARY_DOWNLOAD" = 1 ]; then
+      # --- download release (fallback) ----------------------------------
+      DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/${BIN_NAME}-${OS}-${ARCH}"
+      if [ "$DRY_RUN" = 1 ]; then
+        log "  [dry-run] would download: $DOWNLOAD_URL"
+      else
+        TMP_DIR="$(mktemp -d -t hermes-node-install.XXXXXX)"
+        trap "rm -rf '$TMP_DIR'" EXIT
+        TMP_FILE="$TMP_DIR/$ASSET_NAME"
+        if command -v curl >/dev/null 2>&1; then
+          log "downloading with curl"
+          curl -fL --retry 3 --connect-timeout 15 -o "$TMP_FILE" "$DOWNLOAD_URL" || die "download failed: $DOWNLOAD_URL"
+        elif command -v wget >/dev/null 2>&1; then
+          log "downloading with wget"
+          wget -q --tries=3 --timeout=15 -O "$TMP_FILE" "$DOWNLOAD_URL" || die "download failed: $DOWNLOAD_URL"
+        else
+          die "neither curl nor wget is on PATH; cannot download"
+        fi
+        if [ ! -s "$TMP_FILE" ]; then
+          die "downloaded file is empty: $TMP_FILE"
+        fi
+      fi
+    elif [ "$DRY_RUN" = 1 ]; then
       log "  [dry-run] would: git clone --depth 1 --branch $VERSION https://github.com/$REPO.git \$TMP_DIR/src"
       log "  [dry-run] would: cd \$TMP_DIR/src && go build -o \$TMP_DIR/hermes-node ./cmd/hermes-node"
     else
