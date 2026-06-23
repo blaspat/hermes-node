@@ -13,6 +13,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -882,7 +883,9 @@ func TestRun_Status_DisplaysFile(t *testing.T) {
 	// Create a minimal config so the config directory exists.
 	os.WriteFile(cfgPath, []byte(""), 0o600)
 	statusPath := filepath.Join(dir, "status.json")
-	contents := `{"pid":99999,"state":"connected","name":"test-node","server_url":"wss://x","version":"dev","session_id":"sess-1","started_at":"2026-06-22T21:00:00Z","last_connected_at":"2026-06-22T21:05:00Z"}`
+	// Use the test process's own PID so the liveness check passes.
+	pid := os.Getpid()
+	contents := fmt.Sprintf(`{"pid":%d,"state":"connected","name":"test-node","server_url":"wss://x","version":"dev","session_id":"sess-1","started_at":"2026-06-22T21:00:00Z","last_connected_at":"2026-06-22T21:05:00Z"}`, pid)
 	if err := os.WriteFile(statusPath, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
