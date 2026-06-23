@@ -2,7 +2,7 @@
 
 > Standalone Go binary that pairs a remote laptop with a Hermes Agent brain over WSS and exposes the laptop's shell + filesystem to the agent over an authenticated, encrypted WebSocket connection. The node is the *arm* in a brain-and-arm architecture — it connects outbound, so no inbound ports required on the laptop.
 
-**Status:** v0.2.0. Protocol and architecture are stable.
+**Status:** v0.1.0. Protocol and architecture are stable.
 
 ## Table of Contents
 - [Quick Start](#quick-start)
@@ -135,7 +135,7 @@ Self-updates the binary from GitHub Releases. Downloads the latest release for y
 ```bash
 hermes-node update                          # latest release with confirmation
 hermes-node update --yes                    # skip confirmation prompt
-hermes-node update --version v0.2.0         # pin to a specific version
+hermes-node update --version v0.1.0         # pin to a specific version
 hermes-node update --restart-service        # also restart systemd/launchd
 ```
 
@@ -277,7 +277,7 @@ Same protocol on both sides — see [`PROTOCOL.md`](./PROTOCOL.md).
 
 **Node fails to start after reboot** — Confirm the service was installed (`systemctl --user status hermes-node` or launchd entry). Check the audit log (`cat ~/.hermes-nodes/audit.log`).
 
-**Stderr not captured** — Since v0.2.0, stderr is captured from the shell executor. If you see unexpected output, check if the command is producing stderr (file not found, permission errors, etc.).
+**Stderr not captured** — Since v0.1.0, stderr is captured from the shell executor. If you see unexpected output, check if the command is producing stderr (file not found, permission errors, etc.).
 
 **Config file not found** — Ensure `~/.hermes-nodes/config.toml` exists. Run `hermes-node pair` to create it, or pass `--config <path>` to every subcommand.
 
@@ -313,7 +313,7 @@ Quick summary:
 
 - **Q: Can I reload config without restarting?** A: Send `SIGHUP` to the daemon process to reload `log_level`. Other changes require a restart.
 
-- **Q: What does `--version` show?** A: The version, Go version, commit SHA, and build date. Example: `hermes-node v0.2.0 go1.26.3 abc12345 2026-06-22`.
+- **Q: What does `--version` show?** A: The version, Go version, commit SHA, and build date. Example: `hermes-node v0.1.0 go1.26.3 abc12345 2026-06-22`.
 
 ## Related
 
