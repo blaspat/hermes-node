@@ -38,6 +38,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -951,6 +952,7 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "this will replace %s with %s. Continue? [y/N] ", binPath, tag)
 		var reply string
 		fmt.Scanln(&reply)
+		reply = strings.TrimSpace(reply)
 		if reply != "y" && reply != "Y" && reply != "yes" && reply != "YES" {
 			fmt.Fprintln(stdout, "update cancelled.")
 			return 0
