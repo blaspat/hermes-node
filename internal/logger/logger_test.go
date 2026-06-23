@@ -37,11 +37,11 @@ func TestParseLevel(t *testing.T) {
 
 func TestLevelFiltering(t *testing.T) {
 	tests := []struct {
-		name     string
-		level    Level
-		logFn    func(l *Logger)
-		want     int // expected occurrences of the message substring
-		message  string
+		name    string
+		level   Level
+		logFn   func(l *Logger)
+		want    int // expected occurrences of the message substring
+		message string
 	}{
 		{
 			name:    "debug suppressed at INFO",

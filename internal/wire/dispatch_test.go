@@ -563,9 +563,9 @@ func TestDispatch_HandlerPanicRecovers(t *testing.T) {
 	if err := d.Register(TypeRead, func(ctx context.Context, requestID string, payload map[string]any) (Envelope, error) {
 		secondCall.Add(1)
 		return NewReadResultEnvelope(requestID, ReadResultPayload{
-			Status:    "ok",
+			Status:     "ok",
 			ContentB64: "aGkK", // base64("hi\n")
-			SizeBytes: 3,
+			SizeBytes:  3,
 		}), nil
 	}); err != nil {
 		t.Fatalf("Register read: %v", err)

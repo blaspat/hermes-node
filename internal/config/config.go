@@ -29,15 +29,15 @@ type Config struct {
 // to callers that pass a file with looser permissions, so a chmod slip
 // during a manual edit can't accidentally widen the token's visibility.
 type NodeConfig struct {
-	ServerURL       string   `toml:"server_url"`
-	Name            string   `toml:"name"`
-	Token           string   `toml:"token"`
-	AllowedPaths    []string `toml:"allowed_paths"`
-	LogPath         string   `toml:"log_path"`
-	LogLevel        string   `toml:"log_level"`
-	BackoffInitial  string  `toml:"backoff_initial"`
-	BackoffMax      string  `toml:"backoff_max"`
-	BackoffFactor   float64 `toml:"backoff_factor"`
+	ServerURL      string   `toml:"server_url"`
+	Name           string   `toml:"name"`
+	Token          string   `toml:"token"`
+	AllowedPaths   []string `toml:"allowed_paths"`
+	LogPath        string   `toml:"log_path"`
+	LogLevel       string   `toml:"log_level"`
+	BackoffInitial string   `toml:"backoff_initial"`
+	BackoffMax     string   `toml:"backoff_max"`
+	BackoffFactor  float64  `toml:"backoff_factor"`
 }
 
 // BackoffInitialDuration parses BackoffInitial as a Go duration string

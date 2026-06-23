@@ -52,9 +52,9 @@ func serveTLSScenario(t *testing.T, sc testScenario) *httptest.Server {
 		}
 		_ = conn.SetWriteDeadline(time.Now().Add(sc.handshakeTimeout))
 		_ = conn.WriteJSON(map[string]any{
-			"type":          "hello_ack",
-			"session_id":    "test-session-tls",
-			"server_time":   "2026-06-11T00:00:00Z",
+			"type":        "hello_ack",
+			"session_id":  "test-session-tls",
+			"server_time": "2026-06-11T00:00:00Z",
 		})
 
 		_ = conn.SetReadDeadline(time.Now().Add(sc.handshakeTimeout))

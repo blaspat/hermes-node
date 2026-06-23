@@ -49,10 +49,10 @@ func TestParseGlobalArgs(t *testing.T) {
 			wantSub:    nil,
 		},
 		{
-			name:       "version flag",
-			args:       []string{"--version"},
+			name:        "version flag",
+			args:        []string{"--version"},
 			wantVersion: true,
-			wantConfig: testDefaultConfigPath(),
+			wantConfig:  testDefaultConfigPath(),
 		},
 		{
 			name:       "help short",
@@ -86,11 +86,11 @@ func TestParseGlobalArgs(t *testing.T) {
 			wantSub:    []string{"pair", "--server", "wss://x"},
 		},
 		{
-			name:       "version flag mixed with subcommand",
-			args:       []string{"pair", "--version", "--server", "wss://x"},
+			name:        "version flag mixed with subcommand",
+			args:        []string{"pair", "--version", "--server", "wss://x"},
 			wantVersion: true,
-			wantConfig: testDefaultConfigPath(),
-			wantSub:    []string{"pair", "--server", "wss://x"},
+			wantConfig:  testDefaultConfigPath(),
+			wantSub:     []string{"pair", "--server", "wss://x"},
 		},
 		{
 			name:    "config without value",

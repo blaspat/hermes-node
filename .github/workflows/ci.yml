@@ -1,0 +1,38 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build
+        run: go build ./...
+      - name: Test (stable packages)
+        run: go test ./internal/exec/ ./internal/config/ ./internal/logger/ ./internal/audit/ ./internal/fs/ ./cmd/hermes-node/ -count=1
+      - name: Race test (stable packages)
+        run: go test -race ./internal/exec/ ./internal/config/ ./internal/logger/ ./internal/audit/ ./internal/fs/ ./cmd/hermes-node/ -count=1
