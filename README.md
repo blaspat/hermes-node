@@ -38,6 +38,7 @@ hermes-node run
 
 ```bash
 brew tap blaspat/hermes-node
+brew trust blaspat/hermes-node
 brew install hermes-node
 ```
 
