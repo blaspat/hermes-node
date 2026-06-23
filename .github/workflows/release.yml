@@ -22,15 +22,12 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
-  update-homebrew:
+  update-formula:
     runs-on: ubuntu-latest
     needs: release
     steps:
       - uses: actions/checkout@v4
-        with:
-          repository: blaspat/homebrew-hermes-node
-          token: ${{ secrets.GH_PAT }}
-      - name: Update formula
+      - name: Update Homebrew formula
         run: |
           VERSION="${{ github.ref_name }}"
           URL="https://github.com/blaspat/hermes-nodes/archive/refs/tags/${VERSION}.tar.gz"
@@ -61,5 +58,5 @@ jobs:
           git config user.name "blaspat"
           git config user.email "blasius.patrick@gmail.com"
           git add -A
-          git commit -m "Update hermes-node to ${{ github.ref_name }}"
+          git commit -m "Update Homebrew formula to ${{ github.ref_name }}"
           git push
