@@ -115,13 +115,13 @@ The daemon re-reads `config.toml` and applies the new `log_level`. Other changes
 
 ### `hermes-node status`
 
-Reads the daemon's status file and displays connection state, session ID, uptime, and last error. No server connection required.
+Reads the daemon's status file and displays connection state, session ID, uptime, and last error. No server connection required. The state is cross-checked against the actual process table — if the daemon was killed, it shows `stopped` even if the status file hasn't been updated.
 
 ```bash
 hermes-node status
 ```
 
-Output example:
+Output when running:
 ```
 hermes-node dev go1.26.3 a1b2c3d4 2026-06-22
   PID:       12345
@@ -133,9 +133,17 @@ hermes-node dev go1.26.3 a1b2c3d4 2026-06-22
   Connected: 2026-06-22T21:05:00Z
 ```
 
-If the daemon has never been started:
+If the daemon is not running:
 ```
-hermes-node: daemon status file not found — node has never been started.
+hermes-node: daemon not running (status file not found)
+```
+
+### `hermes-node stop`
+
+Stops the running daemon. Sends SIGTERM and waits up to 5 seconds for a clean shutdown. If the daemon doesn't respond, escalates to SIGKILL.
+
+```bash
+hermes-node stop
 ```
 
 ### `hermes-node update`

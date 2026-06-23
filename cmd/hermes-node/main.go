@@ -107,6 +107,7 @@ const usage = `hermes-node — pair a laptop with a Hermes Agent brain
 Usage:
   hermes-node pair --server <wss-url> --token <token> [--config <path>]
   hermes-node run [--config <path>]
+  hermes-node stop
   hermes-node status
   hermes-node update [--version <tag>] [--no-service] [--yes]
   hermes-node uninstall [--purge] [--dry-run]
@@ -122,6 +123,10 @@ Flags:
   hermes-node status reads the daemon's status file and displays
   the current state, session ID, uptime, and last error. No server
   connection is made.
+
+'stop':
+  hermes-node stop sends SIGTERM to the running daemon. If the
+  daemon doesn't exit within 5 seconds, it sends SIGKILL.
 
 'update':
   hermes-node update downloads the latest release binary from
@@ -215,6 +220,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runValidate(subArgs[1:], *configPath, stdout, stderr)
 	case "status":
 		return runStatus(subArgs[1:], stdout, stderr, *configPath)
+	case "stop":
+		return runStop(*configPath, stdout, stderr)
 	case "update":
 		return runUpdate(subArgs[1:], stdout, stderr)
 	default:
@@ -1192,7 +1199,9 @@ func readStatus(path string) (*nodeStatus, error) {
 	return &s, nil
 }
 
-// runStatus reads and displays the daemon status file.
+// runStatus reads and displays the daemon status file, cross-checking
+// the PID against the actual process table so the output reflects
+// reality even if the status file is stale.
 func runStatus(args []string, stdout, stderr io.Writer, configPath string) int {
 	fs := flag.NewFlagSet("hermes-node status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -1206,36 +1215,50 @@ func runStatus(args []string, stdout, stderr io.Writer, configPath string) int {
 	s, err := readStatus(statusPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintln(stdout, "hermes-node: daemon status file not found — node has never been started.")
+			fmt.Fprintln(stdout, "hermes-node: daemon not running (status file not found)")
 			return 0
 		}
 		fmt.Fprintf(stderr, "hermes-node: read status: %v\n", err)
 		return 1
 	}
 
-	// Check if the PID is still alive.
-	running := true
+	// Check if the PID is actually alive by sending signal 0.
+	// On most Unix systems FindProcess always succeeds; the real
+	// check is whether Signal(0) returns an error (ESRCH).
+	alive := false
 	if s.PID > 0 {
 		proc, err := os.FindProcess(s.PID)
-		if err != nil || proc.Signal(os.Signal(syscall.Signal(0))) != nil {
-			running = false
+		if err == nil && proc.Signal(os.Signal(syscall.Signal(0))) == nil {
+			alive = true
 		}
+	}
+
+	// Derive the real state from PID liveness, not just the file.
+	displayState := s.State
+	if !alive {
+		switch s.State {
+		case "connected", "starting":
+			displayState = "stopped"
+		}
+	} else if s.State == "stopped" {
+		// Status file is stale — process is running but file says stopped.
+		displayState = "running"
 	}
 
 	fmt.Fprintf(stdout, "hermes-node %s\n", s.Version)
 	fmt.Fprintf(stdout, "  PID:       %d", s.PID)
-	if !running {
+	if !alive {
 		fmt.Fprintf(stdout, " (not running)")
 	}
 	fmt.Fprintln(stdout)
-	fmt.Fprintf(stdout, "  State:     %s\n", s.State)
+	fmt.Fprintf(stdout, "  State:     %s\n", displayState)
 	if s.Name != "" {
 		fmt.Fprintf(stdout, "  Name:      %s\n", s.Name)
 	}
 	if s.ServerURL != "" {
 		fmt.Fprintf(stdout, "  Server:    %s\n", s.ServerURL)
 	}
-	if s.SessionID != "" {
+	if s.SessionID != "" && alive {
 		fmt.Fprintf(stdout, "  Session:   %s\n", s.SessionID)
 	}
 	if s.StartedAt != "" {
@@ -1247,6 +1270,68 @@ func runStatus(args []string, stdout, stderr io.Writer, configPath string) int {
 	if s.LastError != "" {
 		fmt.Fprintf(stdout, "  Last err:  %s\n", s.LastError)
 	}
+	return 0
+}
+
+// runStop sends SIGTERM to the running daemon and waits for it to
+// exit. If the daemon doesn't stop within 5 seconds, it escalates
+// to SIGKILL.
+func runStop(configPath string, stdout, stderr io.Writer) int {
+	cfgDir := getConfigDir(configPath)
+	statusPath := statusFilePath(cfgDir)
+
+	s, err := readStatus(statusPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintln(stderr, "hermes-node: no daemon running (status file not found)")
+			return 1
+		}
+		fmt.Fprintf(stderr, "hermes-node: read status: %v\n", err)
+		return 1
+	}
+
+	if s.PID <= 0 {
+		fmt.Fprintln(stderr, "hermes-node: no PID recorded in status file")
+		return 1
+	}
+
+	proc, err := os.FindProcess(s.PID)
+	if err != nil {
+		fmt.Fprintf(stderr, "hermes-node: find process %d: %v\n", s.PID, err)
+		return 1
+	}
+
+	// Check if the process is actually alive.
+	if proc.Signal(os.Signal(syscall.Signal(0))) != nil {
+		fmt.Fprintf(stdout, "hermes-node: daemon (PID %d) is not running\n", s.PID)
+		return 0
+	}
+
+	fmt.Fprintf(stdout, "hermes-node: stopping daemon (PID %d)...\n", s.PID)
+
+	// Send SIGTERM.
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		fmt.Fprintf(stderr, "hermes-node: signal SIGTERM: %v\n", err)
+		return 1
+	}
+
+	// Wait up to 5 seconds for it to exit.
+	for i := 0; i < 5; i++ {
+		time.Sleep(time.Second)
+		if proc.Signal(os.Signal(syscall.Signal(0))) != nil {
+			fmt.Fprintln(stdout, "hermes-node: daemon stopped")
+			return 0
+		}
+	}
+
+	// Escalate to SIGKILL.
+	fmt.Fprintf(stdout, "hermes-node: daemon did not respond to SIGTERM, sending SIGKILL...\n")
+	if err := proc.Signal(syscall.SIGKILL); err != nil {
+		fmt.Fprintf(stderr, "hermes-node: signal SIGKILL: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, "hermes-node: daemon killed")
 	return 0
 }
 
