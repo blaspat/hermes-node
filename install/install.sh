@@ -22,10 +22,13 @@
 #   --no-service      install the binary but do not register a service
 #   --uninstall       remove the binary and service registration
 #   --yes             skip the "already installed" confirmation prompt
-#   --from-source     build from source (git clone + go build) instead of
-#                     downloading a release. Useful when no release has been
-#                     cut for your OS/arch yet, or for development.
-#                     Requires: git, go (1.22+)
+#   --from-source   [DEPRECATED — build from source is now the default]
+#                   build from source (git clone + go build) instead of
+#                   downloading a release. This is the default behavior.
+#                   Requires: git, go (1.22+)
+#   --binary        download a pre-built release binary instead of
+#                   building from source (may trigger antivirus false
+#                   positives on Windows)
 #   -h | --help       show this message
 #
 # Environment overrides
@@ -71,8 +74,9 @@ NO_SERVICE="${HERMES_NODE_NO_SERVICE:-0}"
 PRINT_LAYOUT=0
 UNINSTALL=0
 ASSUME_YES="${HERMES_NODE_ASSUME_YES:-0}"
+FROM_SOURCE=1
+BINARY_DOWNLOAD=0
 VERSION="${HERMES_NODE_VERSION:-}"
-FROM_SOURCE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -82,8 +86,9 @@ while [ $# -gt 0 ]; do
     --print-layout)   PRINT_LAYOUT=1; shift ;;
     --no-service)     NO_SERVICE=1; shift ;;
     --uninstall)      UNINSTALL=1; shift ;;
+    --binary)         BINARY_DOWNLOAD=1; FROM_SOURCE=0; shift ;;
+    --from-source)    FROM_SOURCE=1; shift ;;  # now the default, kept for compat
     --yes|-y)         ASSUME_YES=1; shift ;;
-    --from-source)    FROM_SOURCE=1; shift ;;
     -h|--help)        print_help; exit 0 ;;
     *)                die "unknown argument: $1 (try --help)" ;;
   esac
@@ -302,9 +307,7 @@ do_install() {
   log "installing $BIN_NAME for $OS/$ARCH"
 
   # --- resolve version (--version > env > latest) -----------------------
-  # Skip the release lookup when --from-source is set: the build branch
-  # derives its own version from `git describe` (or "dev-unknown").
-  if [ -z "$VERSION" ] && [ "$FROM_SOURCE" != 1 ]; then
+  if [ -z "$VERSION" ]; then
     log "looking up latest release of $REPO"
     if [ "$DRY_RUN" = 1 ]; then
       VERSION="v0.0.0-dryrun"
@@ -316,11 +319,7 @@ do_install() {
       fi
     fi
   fi
-  # The build branch prints its own version (derived from `git describe`).
-  # For the download path, print now since we have the value.
-  if [ "$FROM_SOURCE" != 1 ]; then
-    log "version: $VERSION"
-  fi
+  log "version: $VERSION"
 
   # --- check for existing install --------------------------------------
   if [ -e "$BIN_PATH" ]; then
@@ -342,50 +341,10 @@ do_install() {
   fi
 
   # --- source of the binary -------------------------------------------
-  # Two paths: download a release (the default), or build from source.
-  # --from-source is a fallback for environments where no release has been
-  # cut, or for development. It does a shallow git clone into a temp dir
-  # and runs `go build` against ./cmd/hermes-node.
-  if [ "$FROM_SOURCE" = 1 ]; then
-    log "--from-source set; building from git instead of downloading"
-    if [ "$DRY_RUN" = 1 ]; then
-      log "  [dry-run] would: git clone --depth 1 https://github.com/$REPO.git \$TMP_DIR/src"
-      log "  [dry-run] would: cd \$TMP_DIR/src && go build -o \$TMP_DIR/hermes-node ./cmd/hermes-node"
-    else
-      command -v git >/dev/null 2>&1 || die "--from-source requires git on PATH"
-      command -v go >/dev/null 2>&1 || die "--from-source requires go (1.22+) on PATH"
-      go_version="$(go version 2>/dev/null | awk '{print $3}')"
-      # Match go1.22+ (any minor/patch), or go2+ (future). Anchored at
-      # the front because the input is always "go<ver>".
-      case "$go_version" in
-        go1.2[2-9]*|go1.[3-9]*|go[2-9]*) ;;  # 1.22+
-        *) die "--from-source requires go 1.22 or later; found: $go_version" ;;
-      esac
-      TMP_DIR="$(mktemp -d -t hermes-node-install.XXXXXX)"
-      # shellcheck disable=SC2064  # we want $TMP_DIR captured now
-      trap "rm -rf '$TMP_DIR'" EXIT
-      log "cloning $REPO (shallow)"
-      git clone --depth 1 "https://github.com/$REPO.git" "$TMP_DIR/src" \
-        || die "git clone failed"
-      log "building with $go_version"
-      ( cd "$TMP_DIR/src" && go build -o "$TMP_DIR/hermes-node" ./cmd/hermes-node ) \
-        || die "go build failed"
-      TMP_FILE="$TMP_DIR/hermes-node"
-      # Derive a version string from the source. `git describe` returns
-      # something like "v0.1.0-3-gabcdef0" on a tagged repo, or just the
-      # short SHA on an untagged one. If neither works, fall back to
-      # "dev-unknown" so the summary line is never empty.
-      if [ -z "$VERSION" ]; then
-        VERSION="$(cd "$TMP_DIR/src" && git describe --tags --always --dirty 2>/dev/null || true)"
-        [ -n "$VERSION" ] || VERSION="dev-unknown"
-      fi
-      log "version: $VERSION (from source)"
-    fi
-  else
+  # Default: build from source (avoids antivirus false positives on
+  # pre-built binaries). Use --binary to download a release instead.
+  if [ "$BINARY_DOWNLOAD" = 1 ]; then
     # --- download release -----------------------------------------------
-    # The asset filename in the release is OS/ARCH only (no version), matching
-    # the convention in scripts/build.sh:
-    #   https://github.com/$REPO/releases/download/$VERSION/hermes-node-<os>-<arch>
     DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/${BIN_NAME}-${OS}-${ARCH}"
 
     if [ "$DRY_RUN" = 1 ]; then
@@ -415,6 +374,31 @@ do_install() {
       if [ ! -s "$TMP_FILE" ]; then
         die "downloaded file is empty: $TMP_FILE"
       fi
+    fi
+  else
+    # --- build from source (default) ------------------------------------
+    log "building $VERSION from source"
+
+    if [ "$DRY_RUN" = 1 ]; then
+      log "  [dry-run] would: git clone --depth 1 --branch $VERSION https://github.com/$REPO.git \$TMP_DIR/src"
+      log "  [dry-run] would: cd \$TMP_DIR/src && go build -o \$TMP_DIR/hermes-node ./cmd/hermes-node"
+    else
+      command -v git >/dev/null 2>&1 || die "requires git on PATH"
+      command -v go >/dev/null 2>&1 || die "requires go (1.22+) on PATH"
+      go_version="$(go version 2>/dev/null | awk '{print $3}')"
+      case "$go_version" in
+        go1.2[2-9]*|go1.[3-9]*|go[2-9]*) ;;  # 1.22+
+        *) die "requires go 1.22 or later; found: $go_version" ;;
+      esac
+      TMP_DIR="$(mktemp -d -t hermes-node-install.XXXXXX)"
+      trap "rm -rf '$TMP_DIR'" EXIT
+      log "cloning $REPO at $VERSION"
+      git clone --depth 1 --branch "$VERSION" "https://github.com/$REPO.git" "$TMP_DIR/src" \
+        || die "git clone failed (tag $VERSION not found?)"
+      log "building with $go_version"
+      ( cd "$TMP_DIR/src" && go build -ldflags "-X main.version=$VERSION" -o "$TMP_DIR/hermes-node" ./cmd/hermes-node ) \
+        || die "go build failed"
+      TMP_FILE="$TMP_DIR/hermes-node"
     fi
   fi
 

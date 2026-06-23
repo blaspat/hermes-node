@@ -881,9 +881,13 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 
 const (
 	githubRepo = "blaspat/hermes-nodes"
-	githubAPI  = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
 	githubDL   = "https://github.com/" + githubRepo + "/releases/download"
 )
+
+// githubAPI is the GitHub releases API endpoint. Made a variable so
+// tests can override it to simulate network failures without actually
+// hitting the network.
+var githubAPI = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
 
 // httpClient is used for GitHub API and download requests. The
 // timeout prevents indefinite hangs on unreachable networks.
