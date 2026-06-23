@@ -33,7 +33,15 @@ hermes-node run
 
 ## Installation
 
-### Install the binary
+### Option 1: Homebrew (macOS / Linux) — recommended
+
+```bash
+brew install https://raw.githubusercontent.com/blaspat/hermes-nodes/main/Formula/hermes-node.rb
+```
+
+Builds from source. No antivirus false positives.
+
+### Option 2: GitHub release (macOS / Linux / Windows)
 
 ```bash
 # macOS / Linux
@@ -43,15 +51,22 @@ curl -sSL https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/in
 irm https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.ps1 | iex
 ```
 
-Both installers:
-- Download the latest release binary for your OS/arch
-- Drop it in `~/.local/bin/hermes-node` (or `%LOCALAPPDATA%\Programs\hermes-node\` on Windows)
-- Register it as a background service (launchd / systemd --user / Task Scheduler)
-- Print next-step instructions for pairing with your Hermes brain
+Installer flags:
+| Flag | Description |
+|------|-------------|
+| `--no-service` | Install binary only, skip background service registration |
+| `--yes` | Skip confirmation prompts (non-interactive mode) |
+| `--dry-run` | Preview what would be installed without making changes |
+| `--version <tag>` | Install a specific version instead of the latest |
 
-**No admin rights required. One static binary.**
+Example — install without service:
+```bash
+curl -sSL ... | sh -s -- --no-service
+```
 
-### Build from source
+Builds from source using the latest release tag.
+
+### Option 3: Build from source
 
 ```bash
 git clone https://github.com/blaspat/hermes-nodes.git
