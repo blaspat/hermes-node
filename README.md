@@ -230,22 +230,12 @@ ca_cert = "/home/user/.hermes-nodes/my-ca.pem"
 pinned_cert_sha256 = "a1b2c3d4e5f6..."
 ```
 
-### Hot-reloadable fields (SIGHUP)
-
-| Field | Reloadable? | Since |
-|-------|------------|-------|
-| `log_level` | ✅ Yes | v0.2.0 |
-| `allowed_paths` | ❌ Requires restart | — |
-| `log_path` | ❌ Requires restart | — |
-| `server_url` / `name` / `token` | ❌ Requires restart | — |
-| Backoff settings | ❌ Requires restart | — |
-
 ## Architecture
 
 ```
 ┌───────────────────────┐  outbound WSS  ┌───────────────────────┐
 │ Laptop                │ ──────────────►│ VPS (Hermes brain)    │
-│ hermes-node (Go)      │ ◄────────────── │ hermes-nodes-plugin   │
+│ hermes-node (Go)      │ ◄──────────────│ hermes-nodes-plugin   │
 │  • shell exec         │   commands     │  • Python server      │
 │  • file read/write    │   + results    │  • token auth         │
 │  • audit log          │                │  • registers as env   │
