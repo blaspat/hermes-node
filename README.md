@@ -68,7 +68,7 @@ Requires Go 1.22+.
 | Linux   | amd64  | `hermes-node-linux-amd64`       | ✅ Confirmed   |
 | Linux   | arm64  | `hermes-node-linux-arm64`       | 🏗️ Build only |
 | macOS   | amd64  | `hermes-node-darwin-amd64`      | ✅ Confirmed   |
-| macOS   | arm64  | `hermes-node-darwin-arm64`      | 🏗️ Build only |
+| macOS   | arm64  | `hermes-node-darwin-arm64`      | ✅ Confirmed   |
 | Windows | amd64  | `hermes-node-windows-amd64.exe` | 🏗️ Build only |
 | Windows | arm64  | `hermes-node-windows-arm64.exe` | 🏗️ Build only |
 
