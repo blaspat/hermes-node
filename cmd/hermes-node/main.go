@@ -208,7 +208,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "pair":
 		return runPair(subArgs[1:], *configPath, stdout, stderr)
 	case "run":
-		return runRunWithSignalCtx(*configPath, stdout, stderr)
+		return runDetach(*configPath, subArgs[1:])
 	case "uninstall":
 		return runUninstall(subArgs[1:], stdout, stderr)
 	case "validate":
@@ -221,6 +221,47 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "hermes-node: unknown subcommand %q (run 'hermes-node --help')\n", subArgs[0])
 		return 2
 	}
+}
+
+// runDetach starts the daemon in the background. It forks the current
+// process with stdout and stderr redirected to the log file.
+func runDetach(configPath string, args []string) int {
+	binPath, err := osExecutable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-node: could not determine binary path: %v\n", err)
+		return 1
+	}
+
+	// Rebuild args for the child process.
+	childArgs := []string{"run"}
+	childArgs = append(childArgs, args...)
+	if configPath != "" {
+		childArgs = append(childArgs, "--config", configPath)
+	}
+
+	// Redirect stdout/stderr to a log file.
+	logDir := filepath.Join(getConfigDir(configPath), "daemon.log")
+	if err := os.MkdirAll(filepath.Dir(logDir), 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-node: create log directory: %v\n", err)
+		return 1
+	}
+	f, err := os.OpenFile(logDir, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-node: open log file: %v\n", err)
+		return 1
+	}
+
+	cmd := exec.Command(binPath, childArgs...)
+	cmd.Stdout = f
+	cmd.Stderr = f
+
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-node: start daemon: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stdout, "hermes-node: daemon started (PID %d). Log: %s\n", cmd.Process.Pid, logDir)
+	return 0
 }
 
 // runRunWithSignalCtx is the production entry point for `hermes-node

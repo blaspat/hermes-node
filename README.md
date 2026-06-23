@@ -43,6 +43,9 @@ curl -sSL https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/in
 irm https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.ps1 | iex
 ```
 
+The installer tries to build from source first (Go 1.22+ required).
+If Go is not available, it falls back to downloading the pre-built binary.
+
 Installer flags:
 | Flag | Description |
 |------|-------------|
