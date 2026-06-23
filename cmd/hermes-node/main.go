@@ -106,7 +106,7 @@ const usage = `hermes-node — pair a laptop with a Hermes Agent brain
 
 Usage:
   hermes-node pair --server <wss-url> --token <token> [--config <path>]
-  hermes-node run [--config <path>]
+  hermes-node run [--config <path>] [--detach]
   hermes-node status
   hermes-node update [--version <tag>] [--no-service] [--yes]
   hermes-node uninstall [--purge] [--dry-run]
@@ -208,6 +208,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "pair":
 		return runPair(subArgs[1:], *configPath, stdout, stderr)
 	case "run":
+		if hasDetachFlag(subArgs[1:]) {
+			return runDetach(*configPath, subArgs[1:])
+		}
 		return runRunWithSignalCtx(*configPath, stdout, stderr)
 	case "uninstall":
 		return runUninstall(subArgs[1:], stdout, stderr)
@@ -221,6 +224,64 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "hermes-node: unknown subcommand %q (run 'hermes-node --help')\n", subArgs[0])
 		return 2
 	}
+}
+
+// runDetach starts the daemon in the background. It forks the current
+// process with --detach stripped from the args. The child's stdout and
+// stderr are redirected to the audit log directory.
+func runDetach(configPath string, args []string) int {
+	binPath, err := osExecutable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-node: could not determine binary path: %v\n", err)
+		return 1
+	}
+
+	// Rebuild args without --detach.
+	childArgs := []string{"run"}
+	for _, a := range args {
+		if a == "--detach" {
+			continue
+		}
+		childArgs = append(childArgs, a)
+	}
+	if configPath != "" {
+		childArgs = append(childArgs, "--config", configPath)
+	}
+
+	// Redirect stdout/stderr to a log file.
+	logDir := filepath.Join(getConfigDir(configPath), "daemon.log")
+	if err := os.MkdirAll(filepath.Dir(logDir), 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-node: create log directory: %v\n", err)
+		return 1
+	}
+	f, err := os.OpenFile(logDir, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-node: open log file: %v\n", err)
+		return 1
+	}
+
+	cmd := exec.Command(binPath, childArgs...)
+	cmd.Stdout = f
+	cmd.Stderr = f
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-node: start daemon: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stdout, "hermes-node: daemon started (PID %d). Log: %s\n", cmd.Process.Pid, logDir)
+	return 0
+}
+
+// hasDetachFlag checks whether --detach is in the args list.
+func hasDetachFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--detach" {
+			return true
+		}
+	}
+	return false
 }
 
 // runRunWithSignalCtx is the production entry point for `hermes-node
