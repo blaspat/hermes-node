@@ -33,15 +33,7 @@ hermes-node run
 
 ## Installation
 
-### Option 1: Homebrew (macOS / Linux) — recommended
-
-```bash
-brew install https://raw.githubusercontent.com/blaspat/hermes-nodes/main/Formula/hermes-node.rb
-```
-
-Builds from source. No antivirus false positives.
-
-### Option 2: GitHub release (macOS / Linux / Windows)
+### Option 1: GitHub release (macOS / Linux / Windows)
 
 ```bash
 # macOS / Linux
@@ -66,7 +58,7 @@ curl -sSL ... | sh -s -- --no-service
 
 Builds from source using the latest release tag.
 
-### Option 3: Build from source
+### Option 2: Build from source
 
 ```bash
 git clone https://github.com/blaspat/hermes-nodes.git
