@@ -120,10 +120,10 @@ ASSET_NAME="${BIN_NAME}-${OS}-${ARCH}"
 # ---------------------------------------------------------------------------
 
 # Resolve install + config dirs. The binary goes in a directory that is
-# typically on the user's PATH (e.g. ~/.local/bin per the XDG Base Directory
-# spec); the config dir is separate so the user can wipe it without losing
-# the binary, and vice versa.
-BIN_DIR="${HERMES_NODE_BIN_DIR:-$HOME/.local/bin}"
+# typically on the user's PATH; the config dir was separate so the user could
+# wipe it without losing the binary. Now both share the same directory for
+# simplicity.
+BIN_DIR="${HERMES_NODE_BIN_DIR:-$HOME/.hermes-nodes}"
 CONFIG_DIR="${HERMES_NODE_CONFIG_DIR:-$HOME/.hermes-nodes}"
 BIN_PATH="$BIN_DIR/$BIN_NAME"
 
@@ -439,7 +439,7 @@ Next step — pair this node with your Hermes Agent brain:
 
 If $BIN_DIR is not on your PATH, add this to your shell rc:
 
-  export PATH="\$HOME/.local/bin:\$PATH"
+  export PATH="\$HOME/.hermes-nodes:\$PATH"
 EOF
 }
 
