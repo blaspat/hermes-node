@@ -963,17 +963,17 @@ func TestRun_Update_UnknownFlag(t *testing.T) {
 }
 
 func TestRun_Update_NoNetwork(t *testing.T) {
-	// Tests that update handles a network error gracefully
-	// (instead of panicking or hanging). The default behavior
-	// without --version is to fetch the latest release, which
-	// will fail in a no-network test environment.
+	// Simulate network failure by overriding githubAPI to an invalid URL.
+	orig := githubAPI
+	githubAPI = "http://127.0.0.1:1/nonexistent"
+	defer func() { githubAPI = orig }()
+
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"update", "--yes"}, &stdout, &stderr)
 	if code != 1 {
 		t.Errorf("exit = %d, want 1 (network failure); stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
 	}
-	// Should mention the repo or a network error.
-	if !strings.Contains(stderr.String(), "blaspat") && !strings.Contains(stderr.String(), "fetch") {
+	if !strings.Contains(stderr.String(), "fetch") {
 		t.Errorf("stderr should mention fetch failure; got %q", stderr.String())
 	}
 }
