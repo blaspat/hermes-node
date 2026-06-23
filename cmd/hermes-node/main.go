@@ -106,7 +106,7 @@ const usage = `hermes-node — pair a laptop with a Hermes Agent brain
 
 Usage:
   hermes-node pair --server <wss-url> --token <token> [--config <path>]
-  hermes-node run [--config <path>] [--detach]
+  hermes-node run [--config <path>]
   hermes-node status
   hermes-node update [--version <tag>] [--no-service] [--yes]
   hermes-node uninstall [--purge] [--dry-run]
@@ -208,10 +208,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "pair":
 		return runPair(subArgs[1:], *configPath, stdout, stderr)
 	case "run":
-		if hasDetachFlag(subArgs[1:]) {
-			return runDetach(*configPath, subArgs[1:])
-		}
-		return runRunWithSignalCtx(*configPath, stdout, stderr)
+		return runDetach(*configPath, subArgs[1:])
 	case "uninstall":
 		return runUninstall(subArgs[1:], stdout, stderr)
 	case "validate":
@@ -227,8 +224,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // runDetach starts the daemon in the background. It forks the current
-// process with --detach stripped from the args. The child's stdout and
-// stderr are redirected to the audit log directory.
+// process with stdout and stderr redirected to the log file.
 func runDetach(configPath string, args []string) int {
 	binPath, err := osExecutable()
 	if err != nil {
@@ -236,14 +232,9 @@ func runDetach(configPath string, args []string) int {
 		return 1
 	}
 
-	// Rebuild args without --detach.
+	// Rebuild args for the child process.
 	childArgs := []string{"run"}
-	for _, a := range args {
-		if a == "--detach" {
-			continue
-		}
-		childArgs = append(childArgs, a)
-	}
+	childArgs = append(childArgs, args...)
 	if configPath != "" {
 		childArgs = append(childArgs, "--config", configPath)
 	}
@@ -272,16 +263,6 @@ func runDetach(configPath string, args []string) int {
 
 	fmt.Fprintf(os.Stdout, "hermes-node: daemon started (PID %d). Log: %s\n", cmd.Process.Pid, logDir)
 	return 0
-}
-
-// hasDetachFlag checks whether --detach is in the args list.
-func hasDetachFlag(args []string) bool {
-	for _, a := range args {
-		if a == "--detach" {
-			return true
-		}
-	}
-	return false
 }
 
 // runRunWithSignalCtx is the production entry point for `hermes-node
