@@ -254,7 +254,9 @@ func runDetach(configPath string, args []string) int {
 	cmd := exec.Command(binPath, childArgs...)
 	cmd.Stdout = f
 	cmd.Stderr = f
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if runtime.GOOS != "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-node: start daemon: %v\n", err)
