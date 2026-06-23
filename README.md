@@ -1,8 +1,6 @@
 # hermes-node
 
-> Standalone Go binary that pairs a remote laptop with a Hermes Agent brain over WSS and exposes the laptop's shell + filesystem to the agent over an authenticated, encrypted WebSocket connection. The node is the *arm* in a brain-and-arm architecture — it connects outbound, so no inbound ports required on the laptop.
-
-**Status:** v0.1.0. Protocol and architecture are stable.
+Standalone Go binary that pairs a remote laptop with a Hermes Agent brain over WSS and exposes the laptop's shell + filesystem to the agent over an authenticated, encrypted WebSocket connection. The node is the *arm* in a brain-and-arm architecture — it connects outbound, so no inbound ports required on the laptop.
 
 ## Table of Contents
 - [Quick Start](#quick-start)
