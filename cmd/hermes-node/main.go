@@ -225,7 +225,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 // runDetach starts the daemon in the background. It forks the current
 // process with stdout and stderr redirected to the log file.
+//
+// When called with HERMES_NODE_INNER=1 in the environment, it runs
+// in the foreground instead — the env var is set by the parent before
+// forking and acts as a sentinel so the child executes the real daemon
+// logic instead of forking again.
 func runDetach(configPath string, args []string) int {
+	// If we're the inner daemon (forked by the outer runDetach),
+	// skip the fork and run the real daemon logic directly.
+	if os.Getenv("HERMES_NODE_INNER") != "" {
+		return runRunWithSignalCtx(configPath, os.Stdout, os.Stderr)
+	}
+
 	binPath, err := osExecutable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-node: could not determine binary path: %v\n", err)
@@ -254,6 +265,7 @@ func runDetach(configPath string, args []string) int {
 	cmd := exec.Command(binPath, childArgs...)
 	cmd.Stdout = f
 	cmd.Stderr = f
+	cmd.Env = append(os.Environ(), "HERMES_NODE_INNER=1")
 
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-node: start daemon: %v\n", err)
