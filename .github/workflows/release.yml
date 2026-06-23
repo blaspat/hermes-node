@@ -21,3 +21,45 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  update-homebrew:
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: blaspat/homebrew-hermes-node
+          token: ${{ secrets.GH_PAT }}
+      - name: Update formula
+        run: |
+          VERSION="${{ github.ref_name }}"
+          URL="https://github.com/blaspat/hermes-nodes/archive/refs/tags/${VERSION}.tar.gz"
+          SHA=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
+
+          cat > Formula/hermes-node.rb <<EOF
+          class HermesNode < Formula
+            desc "Standalone Go binary that pairs a remote laptop with a Hermes Agent brain over WSS"
+            homepage "https://github.com/blaspat/hermes-nodes"
+            url "${URL}"
+            sha256 "${SHA}"
+            license "MIT"
+
+            depends_on "go" => :build
+
+            def install
+              ldflags = "-s -w -X main.version=#{version}"
+              system "go", "build", *std_go_args(ldflags: ldflags), "./cmd/hermes-node"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/hermes-node --version")
+            end
+          end
+          EOF
+      - name: Commit and push
+        run: |
+          git config user.name "blaspat"
+          git config user.email "blasius.patrick@gmail.com"
+          git add -A
+          git commit -m "Update hermes-node to ${{ github.ref_name }}"
+          git push
