@@ -389,7 +389,7 @@ func TestExecHandler_RejectsImplicitCwdOutsideAllowlist(t *testing.T) {
 	d := newTestDispatcher(t, pair.client)
 
 	shell := newMockExecuter("", "", 0, nil)
-	shell.cwd = "/etc"                              // shell is in /etc
+	shell.cwd = "/etc"                                             // shell is in /etc
 	h := newTestExecHandler(t, shell, []string{"/home/user"}, nil) // allowlist = /home
 	if err := d.Register(TypeExec, h.Handle); err != nil {
 		t.Fatalf("Register: %v", err)

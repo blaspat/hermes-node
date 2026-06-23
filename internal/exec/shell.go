@@ -125,9 +125,9 @@ type Session struct {
 	// s.mu (captureStderr holds stderrMu while writing). Acquiring
 	// s.mu while holding stderrMu would create a deadlock with any
 	// code path that holds s.mu and then tries to acquire stderrMu.
-	stderrBuf   strings.Builder
-	stderrMu    sync.Mutex
-	stderrPos   int
+	stderrBuf strings.Builder
+	stderrMu  sync.Mutex
+	stderrPos int
 
 	// stderrDone is closed when the captureStderr goroutine exits.
 	// Close() waits on it after killing bash to ensure all stderr
@@ -185,12 +185,12 @@ func NewSession(ctx context.Context) (*Session, error) {
 	}
 
 	s := &Session{
-		id:       id,
-		cmd:      cmd,
-		stdin:    stdin,
-		closeCh:  make(chan struct{}),
-		cwd:      initialCwd,
-		pending:  make(map[uint64]*pendingCall),
+		id:         id,
+		cmd:        cmd,
+		stdin:      stdin,
+		closeCh:    make(chan struct{}),
+		cwd:        initialCwd,
+		pending:    make(map[uint64]*pendingCall),
 		stderrDone: make(chan struct{}),
 	}
 
@@ -613,7 +613,7 @@ func parseCwdMarker(line, sid string) (string, bool) {
 }
 
 // escapeSingleQuotes is the standard POSIX shell single-quote
-// escape: replace each ' with '\'' (close, escape, reopen). This
+// escape: replace each ' with '\” (close, escape, reopen). This
 // is the only safe way to embed a single-quote inside a
 // single-quoted string.
 func escapeSingleQuotes(s string) string {

@@ -832,8 +832,8 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 			}
 			return nil
 		},
-		AuditLog: auditLog,
-		Logger:   log,
+		AuditLog:       auditLog,
+		Logger:         log,
 		BackoffInitial: cfg.Node.BackoffInitialDuration(),
 		BackoffMax:     cfg.Node.BackoffMaxDuration(),
 		BackoffFactor:  cfg.Node.BackoffFactorValue(),
