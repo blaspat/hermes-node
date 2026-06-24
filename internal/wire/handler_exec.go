@@ -30,8 +30,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/blaspat/hermes-nodes/internal/audit"
-	"github.com/blaspat/hermes-nodes/internal/fs"
+	"github.com/blaspat/hermes-node/internal/audit"
+	"github.com/blaspat/hermes-node/internal/fs"
 )
 
 // MaxOutputBytes is the per-stream cap applied to stdout and stderr

@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blaspat/hermes-nodes/internal/audit"
-	"github.com/blaspat/hermes-nodes/internal/exec"
-	"github.com/blaspat/hermes-nodes/internal/fs"
+	"github.com/blaspat/hermes-node/internal/audit"
+	"github.com/blaspat/hermes-node/internal/exec"
+	"github.com/blaspat/hermes-node/internal/fs"
 )
 
 // recordingAudit is an AuditWriter that captures every entry the
