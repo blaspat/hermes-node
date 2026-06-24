@@ -1,4 +1,4 @@
-# hermes-node
+# Hermes Node (client)
 
 Standalone Go binary that pairs a remote laptop with a Hermes Agent brain over WSS and exposes the laptop's shell + filesystem to the agent over an authenticated, encrypted WebSocket connection. The node is the *arm* in a brain-and-arm architecture — it connects outbound, so no inbound ports required on the laptop.
 
@@ -339,7 +339,7 @@ Quick summary:
 
 ## Related
 
-- **[hermes-nodes-plugin](https://github.com/blaspat/hermes-nodes-plugin)** — the Hermes Agent plugin (the "brain" server side)
+- **[hermes-node-plugin](https://github.com/blaspat/hermes-node-plugin)** — the Hermes Agent plugin (the "brain" server side)
 - **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** — the agent framework this plugs into
 - **[PROTOCOL.md](./PROTOCOL.md)** — the wire protocol contract between node and brain
 - **[SECURITY-REVIEW.md](./SECURITY-REVIEW.md)** — threat model and disclosure policy for the node
