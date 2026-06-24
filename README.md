@@ -233,6 +233,10 @@ log_level = "debug"
 backoff_initial = "1s"      # default; Go duration, e.g. "500ms", "5s"
 backoff_max = "60s"         # default; maximum delay between retries
 backoff_factor = 2.0        # default; multiplier per retry
+
+# Proxy: hermes-node respects HTTPS_PROXY / HTTP_PROXY / NO_PROXY
+# env vars automatically. No config field needed — just set them
+# in the shell before running `hermes-node run`.
 ```
 
 ### `[server]` section
@@ -328,6 +332,8 @@ Quick summary:
 - **Q: How do I check if the daemon is running?** A: Run `hermes-node status`. It reads the status file written by the daemon and shows connection state, PID, session ID, and uptime.
 
 - **Q: Can I reload config without restarting?** A: Send `SIGHUP` to the daemon process to reload `log_level`. Other changes require a restart.
+
+- **Q: Does the node support HTTP proxies?** A: Yes. The WebSocket client respects the standard `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`, `http_proxy`, and `NO_PROXY` environment variables automatically. For Basic auth, include credentials in the URL: `http://user:password@proxy:port`. For NTLM/Kerberos proxies, use a local authenticating proxy bridge (e.g. `cntlm`).
 
 - **Q: What does `--version` show?** A: The version, Go version, commit SHA, and build date. Example: `hermes-node v0.1.0 go1.26.3 abc12345 2026-06-22`.
 
