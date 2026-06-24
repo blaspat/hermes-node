@@ -187,7 +187,7 @@ func checkFileMode(path string) error {
 }
 
 // defaultLogPath returns the audit log path used when none is configured:
-// $HOME/.hermes-nodes/audit.log. It returns an error if the home directory
+// $HOME/.hermes-node/audit.log. It returns an error if the home directory
 // cannot be determined, rather than silently producing a relative path that
 // would resolve to the current working directory.
 func defaultLogPath() (string, error) {
@@ -195,5 +195,5 @@ func defaultLogPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("could not determine home directory for default log path: %w", err)
 	}
-	return filepath.Join(home, ".hermes-nodes", "audit.log"), nil
+	return filepath.Join(home, ".hermes-node", "audit.log"), nil
 }

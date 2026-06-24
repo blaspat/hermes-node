@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blaspat/hermes-nodes/internal/config"
+	"github.com/blaspat/hermes-node/internal/config"
 	"github.com/gorilla/websocket"
 )
 
@@ -545,7 +545,7 @@ func TestRun_Uninstall_RemovesBinary(t *testing.T) {
 func TestRun_Uninstall_WithPurge(t *testing.T) {
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "hermes-node")
-	configDir := filepath.Join(dir, ".hermes-nodes")
+	configDir := filepath.Join(dir, ".hermes-node")
 	if err := os.WriteFile(binPath, []byte("fake binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +617,7 @@ func TestRun_Uninstall_DryRun(t *testing.T) {
 func TestRun_Uninstall_DryRunWithPurge(t *testing.T) {
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "hermes-node")
-	configDir := filepath.Join(dir, ".hermes-nodes")
+	configDir := filepath.Join(dir, ".hermes-node")
 	if err := os.WriteFile(binPath, []byte("fake binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}

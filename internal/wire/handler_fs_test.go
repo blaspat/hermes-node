@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blaspat/hermes-nodes/internal/audit"
+	"github.com/blaspat/hermes-node/internal/audit"
 )
 
 // TestReadHandler_HappyPath drives a `read` call against an

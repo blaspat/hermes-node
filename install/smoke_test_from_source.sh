@@ -51,7 +51,7 @@ url="${@:(-2):1}"
 [ -n "$dest" ] || { echo "git shim: missing dest" >&2; exit 1; }
 mkdir -p "$dest/cmd/hermes-node"
 cat >"$dest/go.mod" <<MOD
-module github.com/blaspat/hermes-nodes
+module github.com/blaspat/hermes-node
 go 1.22
 MOD
 cat >"$dest/cmd/hermes-node/main.go" <<'GO'

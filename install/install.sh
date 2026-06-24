@@ -4,7 +4,7 @@
 # user-level background service.
 #
 # Downloads a release binary from GitHub Releases (https://github.com/blaspat/
-# hermes-nodes/releases), drops it in ~/.local/bin/, and creates a per-user
+# hermes-node/releases), drops it in ~/.local/bin/, and creates a per-user
 # service unit so the node runs at login:
 #
 #   - macOS:   ~/Library/LaunchAgents/com.blaspat.hermes-node.plist
@@ -34,10 +34,10 @@
 # Environment overrides
 # --------------------
 #   HERMES_NODE_VERSION   default value of --version
-#   HERMES_NODE_REPO      GitHub repo (default: blaspat/hermes-nodes)
+#   HERMES_NODE_REPO      GitHub repo (default: blaspat/hermes-node)
 #   HERMES_NODE_BIN_DIR   install dir for the binary
 #                          (default: ~/.local/bin)
-#   HERMES_NODE_CONFIG_DIR default: ~/.hermes-nodes
+#   HERMES_NODE_CONFIG_DIR default: ~/.hermes-node
 #   HERMES_NODE_NO_SERVICE  1 to skip service registration
 #   HERMES_NODE_DRY_RUN     1 to dry-run
 #   HERMES_NODE_ASSUME_YES  1 to skip confirmation prompts (like --yes)
@@ -53,7 +53,7 @@
 
 set -euo pipefail
 
-REPO="${HERMES_NODE_REPO:-blaspat/hermes-nodes}"
+REPO="${HERMES_NODE_REPO:-blaspat/hermes-node}"
 BIN_NAME="hermes-node"
 SERVICE_LABEL="com.blaspat.hermes-node"
 
@@ -123,8 +123,8 @@ ASSET_NAME="${BIN_NAME}-${OS}-${ARCH}"
 # typically on the user's PATH; the config dir was separate so the user could
 # wipe it without losing the binary. Now both share the same directory for
 # simplicity.
-BIN_DIR="${HERMES_NODE_BIN_DIR:-$HOME/.hermes-nodes}"
-CONFIG_DIR="${HERMES_NODE_CONFIG_DIR:-$HOME/.hermes-nodes}"
+BIN_DIR="${HERMES_NODE_BIN_DIR:-$HOME/.hermes-node}"
+CONFIG_DIR="${HERMES_NODE_CONFIG_DIR:-$HOME/.hermes-node}"
 BIN_PATH="$BIN_DIR/$BIN_NAME"
 
 # Service files are placed under the user's own config root so we never need
@@ -474,7 +474,7 @@ Next step — pair this node with your Hermes Agent brain:
 
 If $BIN_DIR is not on your PATH, add this to your shell rc:
 
-  export PATH="\$HOME/.hermes-nodes:\$PATH"
+  export PATH="\$HOME/.hermes-node:\$PATH"
 EOF
 }
 
