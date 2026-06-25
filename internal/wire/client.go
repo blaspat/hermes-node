@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"time"
 
@@ -97,6 +98,13 @@ type DialOptions struct {
 	// handed over. A future maintainer should not construct a
 	// per-call closure here.
 	TLSConfig *tls.Config
+
+	// ProxyURL is an optional HTTP(S) proxy URL for the WebSocket
+	// dialer. When set, it overrides the HTTP_PROXY / HTTPS_PROXY
+	// environment variables. Leave empty to use the default
+	// proxy-from-environment behaviour (ProxyFromEnvironment).
+	// Example: "http://proxy.corp.example:8080".
+	ProxyURL string
 }
 
 // withDefaults returns a copy of opts with zero-valued fields filled
@@ -165,6 +173,13 @@ func Connect(ctx context.Context, opts DialOptions) (*Client, error) {
 	dialer := *websocket.DefaultDialer
 	if opts.TLSConfig != nil {
 		dialer.TLSClientConfig = opts.TLSConfig
+	}
+	if opts.ProxyURL != "" {
+		proxyURL, err := url.Parse(opts.ProxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("wire: parse proxy_url: %w", err)
+		}
+		dialer.Proxy = http.ProxyURL(proxyURL)
 	}
 	conn, _, err := dialer.DialContext(wsCtx, opts.ServerURL, nil)
 	if err != nil {

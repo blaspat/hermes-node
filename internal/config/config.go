@@ -35,6 +35,7 @@ type NodeConfig struct {
 	AllowedPaths   []string `toml:"allowed_paths"`
 	LogPath        string   `toml:"log_path"`
 	LogLevel       string   `toml:"log_level"`
+	ProxyURL       string   `toml:"proxy_url"`
 	BackoffInitial string   `toml:"backoff_initial"`
 	BackoffMax     string   `toml:"backoff_max"`
 	BackoffFactor  float64  `toml:"backoff_factor"`

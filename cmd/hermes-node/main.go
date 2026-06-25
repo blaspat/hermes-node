@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -699,6 +700,21 @@ func runValidate(args []string, configPath string, stdout, stderr io.Writer) int
 	}
 	// If no TLS settings are configured, that's fine — no check needed.
 
+	// 5. Proxy URL — validate the URL when set.
+	if cfg.Node.ProxyURL != "" {
+		proxyURL, err := url.Parse(cfg.Node.ProxyURL)
+		if err != nil {
+			fmt.Fprintf(stdout, "  [FAIL] proxy_url: %v\n", err)
+			failed++
+		} else if proxyURL.Scheme != "http" && proxyURL.Scheme != "https" {
+			fmt.Fprintf(stdout, "  [FAIL] proxy_url: scheme %q must be http or https\n", proxyURL.Scheme)
+			failed++
+		} else {
+			fmt.Fprintf(stdout, "  [OK] proxy_url: %s\n", cfg.Node.ProxyURL)
+			passed++
+		}
+	}
+
 	if failed == 0 {
 		fmt.Fprintf(stdout, "\nhermes-node: config is valid (%d checks passed).\n", passed)
 		return 0
@@ -809,6 +825,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				Arch:         runtime.GOARCH,
 				Capabilities: []string{"exec", "read", "write"},
 				TLSConfig:    tlsCfg,
+				ProxyURL:     cfg.Node.ProxyURL,
 			})
 		},
 		// Setup is invoked once per (re)connect. We build a fresh
