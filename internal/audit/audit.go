@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	// DefaultMaxBytes is the rotation threshold: 50 MiB.
-	DefaultMaxBytes int64 = 50 * 1024 * 1024
+	// DefaultMaxBytes is the rotation threshold: 10 MiB.
+	DefaultMaxBytes int64 = 10 * 1024 * 1024
 	// DefaultKeep is how many rotated files are retained.
 	DefaultKeep = 5
 )
