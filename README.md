@@ -229,14 +229,18 @@ log_path = "/home/user/.hermes-nodes/audit.log"
 # One of: debug, info, warn, error
 log_level = "debug"
 
-# Reconnect backoff (defaults shown)
+# Proxy: optional HTTP(S) proxy for the WebSocket connection.
+# When set, overrides HTTPS_PROXY / HTTP_PROXY env vars.
+proxy_url = "http://proxy.corp.example:8080"
+
+# Reconnect backoff: fine-tune the exponential backoff for
+# transient network drops. The defaults work for most setups.
 backoff_initial = "1s"      # default; Go duration, e.g. "500ms", "5s"
 backoff_max = "60s"         # default; maximum delay between retries
 backoff_factor = 2.0        # default; multiplier per retry
 
-# Proxy: hermes-node respects HTTPS_PROXY / HTTP_PROXY / NO_PROXY
-# env vars automatically. No config field needed — just set them
-# in the shell before running `hermes-node run`.
+# Proxy: set proxy_url above, or use HTTPS_PROXY / HTTP_PROXY / NO_PROXY
+# env vars for env-level config.
 ```
 
 ### `[server]` section
@@ -333,7 +337,7 @@ Quick summary:
 
 - **Q: Can I reload config without restarting?** A: Send `SIGHUP` to the daemon process to reload `log_level`. Other changes require a restart.
 
-- **Q: Does the node support HTTP proxies?** A: Yes. The WebSocket client respects the standard `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`, `http_proxy`, and `NO_PROXY` environment variables automatically. For Basic auth, include credentials in the URL: `http://user:password@proxy:port`. For NTLM/Kerberos proxies, use a local authenticating proxy bridge (e.g. `cntlm`).
+- **Q: Does the node support HTTP proxies?** A: Yes. Set `proxy_url` in `config.toml` under `[node]`, or use the standard `HTTPS_PROXY`/`HTTP_PROXY` env vars. For Basic auth, include credentials in the URL: `http://user:password@proxy:port`. For NTLM/Kerberos proxies, use a local authenticating proxy bridge (e.g. `cntlm`).
 
 - **Q: What does `--version` show?** A: The version, Go version, commit SHA, and build date. Example: `hermes-node v0.1.0 go1.26.3 abc12345 2026-06-22`.
 
