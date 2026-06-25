@@ -739,6 +739,22 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 	}
 
 	logLevel, _ := logger.ParseLevel(cfg.Node.LogLevel)
+
+	// When running as the inner daemon (HERMES_NODE_INNER set), replace
+	// stdout/stderr with a rotating file so daemon.log auto-rotates.
+	if os.Getenv("HERMES_NODE_INNER") != "" {
+		dlogPath := filepath.Join(getConfigDir(configPath), "daemon.log")
+		rf, err := logger.NewRotatingFile(dlogPath, 10*1024*1024, 5)
+		if err == nil {
+			stdout = rf
+			stderr = rf
+			defer rf.Close()
+		}
+		// If opening the rotating file fails, fall through with the
+		// original stdout/stderr (the parent already set them to the
+		// raw daemon.log fd, so logging still works — just no rotation).
+	}
+
 	log := logger.NewWithWriters(logLevel, stdout, stderr)
 
 	auditLog, err := audit.New(cfg.Node.LogPath)
