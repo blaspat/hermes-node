@@ -345,6 +345,20 @@ func (s *Session) Run(ctx context.Context, cmd string) (string, string, int, err
 		return "", "", -1, res.err
 	}
 
+	// Wait for the STDBUF marker to appear in stderrBuf.
+	// This ensures captureStderr has flushed all stderr from the
+	// command before we read, avoiding a race where stdout signals
+	// completion before the stderr pipe has finished delivering.
+	stdbufMarker := fmt.Sprintf("__HERMES_STDBUF_%d__", seq)
+	for {
+		s.stderrMu.Lock()
+		done := strings.Contains(s.stderrBuf.String(), stdbufMarker)
+		s.stderrMu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	// Read the stderr produced since fromPos.
 	s.stderrMu.Lock()
 	stderrContent := s.stderrBuf.String()[fromPos:]
@@ -394,6 +408,9 @@ func (s *Session) buildFrame(seq uint64, userCmd string) string {
 	// deliberately use $? *after* eval so a pipeline like
 	// `false | true` reports 0.
 	b.WriteString("__hermes_ec=$?\n")
+	// STDBUF marker: written to stderr after the user command so Run
+	// can wait for stderr to drain before reading the buffer.
+	fmt.Fprintf(&b, "echo '__HERMES_STDBUF_%d__' >&2\n", seq)
 	fmt.Fprintf(&b, "printf '%%s\\n' '__HERMES_END_%d__'\n", seq)
 	b.WriteString("printf 'EXIT %d\\n' \"$__hermes_ec\"\n")
 	fmt.Fprintf(&b, "printf '%%s%%s%%s\\n' '__HERMES_CWD_%s__' \"$(pwd -P)\" '__HERMES_CWD_%s__'\n", s.id, s.id)
