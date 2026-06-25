@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blaspat/hermes-nodes/internal/audit"
+	"github.com/blaspat/hermes-node/internal/audit"
 	"github.com/gorilla/websocket"
 )
 

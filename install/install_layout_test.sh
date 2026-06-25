@@ -103,7 +103,7 @@ SHIM
     fail "linux layout: binary path" "got $actual_binary"
     return
   fi
-  if [ "$actual_config" != "$home/.hermes-nodes" ]; then
+  if [ "$actual_config" != "$home/.hermes-node" ]; then
     fail "linux layout: config dir" "got $actual_config"
     return
   fi

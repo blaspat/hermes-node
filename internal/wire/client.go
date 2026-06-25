@@ -1,4 +1,4 @@
-// Package wire implements the client side of the hermes-nodes WSS
+// Package wire implements the client side of the hermes-node WSS
 // protocol. This file is the dialer + handshake state machine. The
 // dispatch loop (server-initiated exec/read/write) is in dispatch.go
 // (Task 1.6) and intentionally lives in a separate file so the

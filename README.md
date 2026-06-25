@@ -1,4 +1,4 @@
-# hermes-node
+# Hermes Node (client)
 
 Standalone Go binary that pairs a remote laptop with a Hermes Agent brain over WSS and exposes the laptop's shell + filesystem to the agent over an authenticated, encrypted WebSocket connection. The node is the *arm* in a brain-and-arm architecture — it connects outbound, so no inbound ports required on the laptop.
 
@@ -17,13 +17,13 @@ Standalone Go binary that pairs a remote laptop with a Hermes Agent brain over W
 
 ```bash
 # Install the binary
-curl -sSL https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/blaspat/hermes-node/main/install/install.sh | sh
 
 # Pair with your Hermes brain
 hermes-node pair --server wss://vps.yourdomain.com:7000 --token <TOKEN> --name work-laptop
 
 # Edit config to set allowed paths
-#   ~/.hermes-nodes/config.toml
+#   ~/.hermes-node/config.toml
 
 # Start the daemon
 hermes-node run
@@ -35,10 +35,10 @@ hermes-node run
 
 ```bash
 # macOS / Linux
-curl -sSL https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/blaspat/hermes-node/main/install/install.sh | sh
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/blaspat/hermes-nodes/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/blaspat/hermes-node/main/install/install.ps1 | iex
 ```
 
 The installer tries to build from source first (Go 1.22+ required).
@@ -62,8 +62,8 @@ Builds from source using the latest release tag.
 ### Option 2: Build from source
 
 ```bash
-git clone https://github.com/blaspat/hermes-nodes.git
-cd hermes-nodes
+git clone https://github.com/blaspat/hermes-node.git
+cd hermes-node
 go build -o hermes-node ./cmd/hermes-node
 ```
 
@@ -163,7 +163,7 @@ Removes the binary, stops and deregisters the background service, and optionally
 
 ```bash
 hermes-node uninstall                        # remove binary + service, keep config
-hermes-node uninstall --purge               # also remove ~/.hermes-nodes/
+hermes-node uninstall --purge               # also remove ~/.hermes-node/
 hermes-node uninstall --dry-run             # preview without making changes
 ```
 
@@ -172,7 +172,7 @@ hermes-node uninstall --dry-run             # preview without making changes
 - **macOS:** `launchctl unload`, then deletes `~/Library/LaunchAgents/com.blaspat.hermes-node.plist`
 - **Windows:** Use `install.ps1 --Uninstall` (Task Scheduler removal)
 
-The config directory (`~/.hermes-nodes/`) is left in place by default. Pass `--purge` to also remove all config, tokens, and audit logs.
+The config directory (`~/.hermes-node/`) is left in place by default. Pass `--purge` to also remove all config, tokens, and audit logs.
 
 ### `hermes-node validate`
 
@@ -206,7 +206,7 @@ Format: `hermes-node <version> <go-version> <commit-sha>[-dirty] <date>`. When b
 
 ## Configuration
 
-The config file is written by `hermes-node pair` and edited manually by the operator. Default location: `~/.hermes-nodes/config.toml`.
+The config file is written by `hermes-node pair` and edited manually by the operator. Default location: `~/.hermes-node/config.toml`.
 
 ### `[node]` section
 
@@ -222,8 +222,8 @@ token = "abc123..."
 # existing directory.
 allowed_paths = ["/home/user", "/tmp"]
 
-# Audit log location (default: ~/.hermes-nodes/audit.log)
-log_path = "/home/user/.hermes-nodes/audit.log"
+# Audit log location (default: ~/.hermes-node/audit.log)
+log_path = "/home/user/.hermes-node/audit.log"
 
 # Log level (default: "info")
 # One of: debug, info, warn, error
@@ -248,7 +248,7 @@ backoff_factor = 2.0        # default; multiplier per retry
 ```toml
 [server]
 # Custom CA bundle for self-signed certs (optional)
-ca_cert = "/home/user/.hermes-nodes/my-ca.pem"
+ca_cert = "/home/user/.hermes-node/my-ca.pem"
 
 # Leaf certificate SHA-256 pin (optional, hex-encoded 64 chars)
 pinned_cert_sha256 = "a1b2c3d4e5f6..."
@@ -259,7 +259,7 @@ pinned_cert_sha256 = "a1b2c3d4e5f6..."
 ```
 ┌───────────────────────┐  outbound WSS  ┌───────────────────────┐
 │ Laptop                │ ──────────────►│ VPS (Hermes brain)    │
-│ hermes-node (Go)      │ ◄──────────────│ hermes-nodes-plugin   │
+│ hermes-node (Go)      │ ◄──────────────│ hermes-node-plugin    │
 │  • shell exec         │   commands     │  • Python server      │
 │  • file read/write    │   + results    │  • token auth         │
 │  • audit log          │                │  • registers as env   │
@@ -299,11 +299,11 @@ Same protocol on both sides — see [`PROTOCOL.md`](./PROTOCOL.md).
 
 **Permission denied on `allowed_paths`** — Verify every path in `allowed_paths` exists and is readable/writable by the user running the node. An empty list (`allowed_paths = []`) leaves the node read-only.
 
-**Node fails to start after reboot** — Confirm the service was installed (`systemctl --user status hermes-node` or launchd entry). Check the audit log (`cat ~/.hermes-nodes/audit.log`).
+**Node fails to start after reboot** — Confirm the service was installed (`systemctl --user status hermes-node` or launchd entry). Check the audit log (`cat ~/.hermes-node/audit.log`).
 
 **Stderr not captured** — Since v0.1.0, stderr is captured from the shell executor. If you see unexpected output, check if the command is producing stderr (file not found, permission errors, etc.).
 
-**Config file not found** — Ensure `~/.hermes-nodes/config.toml` exists. Run `hermes-node pair` to create it, or pass `--config <path>` to every subcommand.
+**Config file not found** — Ensure `~/.hermes-node/config.toml` exists. Run `hermes-node pair` to create it, or pass `--config <path>` to every subcommand.
 
 **Daemon not responding to status** — Run `hermes-node status` to check if the daemon is running. If the status file is stale (PID not running), the `(not running)` indicator will appear.
 
@@ -325,11 +325,11 @@ Quick summary:
 
 - **Q: Can the server bypass the path allowlist?** A: No. The allowlist is enforced on the laptop. The server never sees its contents.
 
-- **Q: What happens if the laptop is stolen?** A: The token is in `~/.hermes-nodes/config.toml` (mode 0600). Revoke the token on the server with `hermes node revoke --name <name>` — revocation is immediate.
+- **Q: What happens if the laptop is stolen?** A: The token is in `~/.hermes-node/config.toml` (mode 0600). Revoke the token on the server with `hermes node revoke --name <name>` — revocation is immediate.
 
 - **Q: Will v2 add keychain support?** A: Yes. OS keychain token storage is a roadmap item for v2.
 
-- **Q: How do I uninstall?** A: Run `hermes-node uninstall` to remove the binary and service. Add `--purge` to also remove `~/.hermes-nodes/`. On Windows, use `install.ps1 --Uninstall`.
+- **Q: How do I uninstall?** A: Run `hermes-node uninstall` to remove the binary and service. Add `--purge` to also remove `~/.hermes-node/`. On Windows, use `install.ps1 --Uninstall`.
 
 - **Q: How do I update?** A: Run `hermes-node update` to self-update from GitHub Releases. Pass `--version <tag>` to pin a specific release.
 
@@ -343,10 +343,9 @@ Quick summary:
 
 ## Related
 
-- **[hermes-nodes-plugin](https://github.com/blaspat/hermes-nodes-plugin)** — the Hermes Agent plugin (the "brain" server side)
+- **[Hermes Node Plugin](https://github.com/blaspat/hermes-node-plugin)** — the Hermes Agent plugin (the "brain" server side)
 - **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** — the agent framework this plugs into
 - **[PROTOCOL.md](./PROTOCOL.md)** — the wire protocol contract between node and brain
-- **[SECURITY-REVIEW.md](./SECURITY-REVIEW.md)** — threat model and disclosure policy for the node
 
 ---
 

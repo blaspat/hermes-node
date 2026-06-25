@@ -1,4 +1,4 @@
-module github.com/blaspat/hermes-nodes
+module github.com/blaspat/hermes-node
 
 go 1.22
 

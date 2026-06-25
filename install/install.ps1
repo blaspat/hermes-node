@@ -4,7 +4,7 @@
 # Scheduler task that starts at user logon.
 #
 # Downloads a release binary from GitHub Releases (https://github.com/blaspat/
-# hermes-nodes/releases), drops it in %LOCALAPPDATA%\Programs\hermes-node\
+# hermes-node/releases), drops it in %LOCALAPPDATA%\Programs\hermes-node\
 # (and adds that directory to the user's PATH if missing), and registers a
 # per-user scheduled task that runs the binary at logon.
 #
@@ -16,13 +16,13 @@
 #   -NoService        install the binary but do not register a task
 #   -Uninstall        remove the binary and task registration
 #   -Yes              skip the "already installed" confirmation prompt
-#   -Repo <owner/name> GitHub repo (default: blaspat/hermes-nodes)
+#   -Repo <owner/name> GitHub repo (default: blaspat/hermes-node)
 #   -Help             show this message
 #
 # Environment overrides
 # --------------------
 #   HERMES_NODE_VERSION   default value of -Version
-#   HERMES_NODE_REPO      default: blaspat/hermes-nodes
+#   HERMES_NODE_REPO      default: blaspat/hermes-node
 #   HERMES_NODE_BIN_DIR   override the install dir
 #   HERMES_NODE_CONFIG_DIR override the config dir
 #   HERMES_NODE_DRY_RUN   "1" to dry-run
@@ -50,7 +50,7 @@ param(
   [switch]$Uninstall,
   [switch]$Yes = $false,
   [string]$Repo = (
-    if ($env:HERMES_NODE_REPO) { $env:HERMES_NODE_REPO } else { 'blaspat/hermes-nodes' }
+    if ($env:HERMES_NODE_REPO) { $env:HERMES_NODE_REPO } else { 'blaspat/hermes-node' }
   )
 )
 
@@ -111,7 +111,7 @@ $AssetName = "$script:BinName-windows-$AssetArch.exe"
 # ---------------------------------------------------------------------------
 
 $BinDir = if ($env:HERMES_NODE_BIN_DIR) { $env:HERMES_NODE_BIN_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\hermes-node' }
-$ConfigDir = if ($env:HERMES_NODE_CONFIG_DIR) { $env:HERMES_NODE_CONFIG_DIR } else { Join-Path $env:APPDATA 'hermes-nodes' }
+$ConfigDir = if ($env:HERMES_NODE_CONFIG_DIR) { $env:HERMES_NODE_CONFIG_DIR } else { Join-Path $env:APPDATA 'hermes-node' }
 $BinPath = Join-Path $BinDir "$script:BinName.exe"
 $TaskCmd = "`"$BinPath`""
 

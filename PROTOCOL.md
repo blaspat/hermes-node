@@ -331,7 +331,7 @@ A handler that wants to fail cleanly should return an error; panics are reserved
 - **Token:** 32 bytes, base64url-encoded, generated with `secrets.token_urlsafe(32)`. Compared in constant time on the server.
 - **Token storage:**
   - On the server: encrypted at rest with Fernet (symmetric AES-128 + HMAC) using a key from `HERMES_NODES_TOKEN_KEY` in `~/.hermes/.env`.
-  - On the node: plaintext in `~/.hermes-nodes/config.toml` with file mode `0600`. Future v2: OS keychain.
+  - On the node: plaintext in `~/.hermes-node/config.toml` with file mode `0600`. Future v2: OS keychain.
 - **Allowlist:** the node enforces a path allowlist for `read` and `write` independently of the server. The server does not see the allowlist contents.
 - **Audit:** every call is logged on both sides with the same fields (timestamp, node name, action, duration, exit code, request id, status). Audit logs are append-only.
 
