@@ -18,10 +18,10 @@ server_url = "wss://vps.example.com:6969"
 name = "work-laptop"
 token = "test-token-do-not-use-in-prod"
 allowed_paths = ["/Users/patrick", "/tmp"]
-log_path = "/Users/patrick/.hermes-nodes/audit.log"
+log_path = "/Users/patrick/.hermes-node/audit.log"
 
 [server]
-ca_cert = "/Users/patrick/.hermes-nodes/my-ca.pem"
+ca_cert = "/Users/patrick/.hermes-node/my-ca.pem"
 pinned_cert_sha256 = "a1b2c3d4e5f6"
 `
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
@@ -45,11 +45,11 @@ pinned_cert_sha256 = "a1b2c3d4e5f6"
 	if got, want := cfg.Node.AllowedPaths, []string{"/Users/patrick", "/tmp"}; !equalStrings(got, want) {
 		t.Errorf("Node.AllowedPaths = %v, want %v", got, want)
 	}
-	if cfg.Node.LogPath != "/Users/patrick/.hermes-nodes/audit.log" {
-		t.Errorf("Node.LogPath = %q, want %q", cfg.Node.LogPath, "/Users/patrick/.hermes-nodes/audit.log")
+	if cfg.Node.LogPath != "/Users/patrick/.hermes-node/audit.log" {
+		t.Errorf("Node.LogPath = %q, want %q", cfg.Node.LogPath, "/Users/patrick/.hermes-node/audit.log")
 	}
-	if cfg.Server.CACert != "/Users/patrick/.hermes-nodes/my-ca.pem" {
-		t.Errorf("Server.CACert = %q, want %q", cfg.Server.CACert, "/Users/patrick/.hermes-nodes/my-ca.pem")
+	if cfg.Server.CACert != "/Users/patrick/.hermes-node/my-ca.pem" {
+		t.Errorf("Server.CACert = %q, want %q", cfg.Server.CACert, "/Users/patrick/.hermes-node/my-ca.pem")
 	}
 	if cfg.Server.PinnedCertSHA256 != "a1b2c3d4e5f6" {
 		t.Errorf("Server.PinnedCertSHA256 = %q, want %q", cfg.Server.PinnedCertSHA256, "a1b2c3d4e5f6")

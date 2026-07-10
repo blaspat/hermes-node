@@ -19,7 +19,7 @@ func TestSessionAdapter_ForwardsCommand(t *testing.T) {
 	// round-trips. If the adapter dropped cmd or messed up
 	// argument order, the shell would run the wrong command.
 	t.Setenv("HERMES_CWD", t.TempDir())
-	s, err := NewSession(context.Background())
+	s, err := NewSession(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}

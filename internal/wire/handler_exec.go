@@ -31,8 +31,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/blaspat/hermes-nodes/internal/audit"
-	"github.com/blaspat/hermes-nodes/internal/fs"
+	"github.com/blaspat/hermes-node/internal/audit"
+	"github.com/blaspat/hermes-node/internal/fs"
 )
 
 // MaxOutputBytes is the per-stream cap applied to stdout and stderr
@@ -168,12 +168,12 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Pre-flight: resolve the effective working directory. When the
-	// call provides an explicit cwd we validate it against the
-	// allowlist. When the call omits cwd we resolve it from the
-	// shell's current working directory and validate *that* against
-	// the allowlist, so a rogue client cannot bypass the allowlist
-	// by simply omitting the cwd field.
+	// Resolve the effective working directory. When the call provides
+	// an explicit cwd we validate it against the allowlist. When the
+	// call omits cwd we resolve it from the shell's current working
+	// directory and validate *that* against the allowlist, so a rogue
+	// client cannot bypass the allowlist by simply omitting the cwd
+	// field.
 	//
 	// If the cwd is outside the allowlist and at least one allowed
 	// path is configured, we auto-cd to the first allowed path and
@@ -184,47 +184,55 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// An empty Allowed list (nil/empty) is treated differently
 	// depending on whether the cwd was explicit:
 	//   - explicit cwd + empty Allowed → reject (deny-by-default)
-	//   - implicit cwd + empty Allowed → allow (backward compatible)
+	//   - implicit cwd + empty Allowed → allow (backward compatible:
+	//     the operator hasn't configured allowed_paths, so the shell
+	//     cwd is trusted).
 	cwd := p.Cwd
 	explicitCwd := cwd != ""
 	var canonical string
 
 	if !explicitCwd {
+		// Resolve from the shell. The shell's Cwd() reflects its
+		// actual working directory (updated by the CWD marker after
+		// every Run), so this is always current.
 		cwd = h.Shell.Cwd()
 	}
 
+	// When the allowlist is empty and the cwd is explicit, fs.Check
+	// rejects with "no roots configured" — we let that happen. When
+	// the allowlist is empty and the cwd is implicit we skip the
+	// check entirely (backward compatible).
+	shouldCheck := explicitCwd || len(h.Allowed) > 0
+
 	var cwdNote string
-	if cwd != "" && len(h.Allowed) > 0 {
+	if cwd != "" && shouldCheck {
 		ok, canon, err := fs.Check(h.Allowed, cwd)
 		canonical = canon
 		if err != nil || !ok {
-			// Outside allowlist. Auto-cd to first allowed path.
-			firstAllowed := h.Allowed[0]
-			// Shell-quote the path: wrap in single quotes, escape
-			// any embedded single quotes per POSIX convention.
-			sq := "'" + strings.ReplaceAll(firstAllowed, "'", "'\\''") + "'"
-			p.Command = "cd " + sq + " 2>/dev/null\n" + p.Command
-			canonical = firstAllowed
-			cwdNote = "[hermes-node: cwd was outside allowed_paths — auto-cd'd to " + firstAllowed + "]"
-		}
-	} else if cwd != "" && explicitCwd && len(h.Allowed) == 0 {
-		// Explicit cwd with no allowlist at all → fs.Check rejects
-		// with "no roots configured", which is the correct deny-by-
-		// default for a caller who explicitly asked for a directory.
-		ok, canon, err := fs.Check(h.Allowed, cwd)
-		canonical = canon
-		if err != nil || !ok {
-			h.auditExec(p, audit.Entry{
-				TS:     h.now(),
-				Action: "exec",
-				Target: canonical,
-				Status: "error",
-			})
-			return NewExecResultEnvelope(requestID, ExecResultPayload{
-				Status:     "error",
-				ExitCode:   -1,
-				DurationMS: 0,
-			}), nil
+			if len(h.Allowed) > 0 {
+				// Outside allowlist but we have allowed paths to
+				// fall back to. Auto-cd to the first one.
+				firstAllowed := h.Allowed[0]
+				// Shell-quote: wrap in single quotes, escape any
+				// embedded single quotes per POSIX convention.
+				sq := "'" + strings.ReplaceAll(firstAllowed, "'", "'\\''") + "'"
+				p.Command = "cd " + sq + " 2>/dev/null\n" + p.Command
+				canonical = firstAllowed
+				cwdNote = "[hermes-node: cwd was outside allowed_paths — auto-cd'd to " + firstAllowed + "]"
+			} else {
+				// Explicit cwd with no allowlist configured → reject.
+				h.auditExec(p, audit.Entry{
+					TS:     h.now(),
+					Action: "exec",
+					Target: canonical,
+					Status: "error",
+				})
+				return NewExecResultEnvelope(requestID, ExecResultPayload{
+					Status:     "error",
+					ExitCode:   -1,
+					DurationMS: 0,
+				}), nil
+			}
 		}
 	}
 

@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -43,11 +44,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/blaspat/hermes-nodes/internal/audit"
-	"github.com/blaspat/hermes-nodes/internal/config"
-	execer "github.com/blaspat/hermes-nodes/internal/exec"
-	"github.com/blaspat/hermes-nodes/internal/logger"
-	"github.com/blaspat/hermes-nodes/internal/wire"
+	"github.com/blaspat/hermes-node/internal/audit"
+	"github.com/blaspat/hermes-node/internal/config"
+	execer "github.com/blaspat/hermes-node/internal/exec"
+	"github.com/blaspat/hermes-node/internal/logger"
+	"github.com/blaspat/hermes-node/internal/wire"
 )
 
 // version is set at build time via -ldflags "-X main.version=...". The
@@ -117,7 +118,7 @@ Usage:
 
 Flags:
   --config <path>   load/save config from this path
-                    (default: ~/.hermes-nodes/config.toml)
+                    (default: ~/.hermes-node/config.toml)
 
 'status':
   hermes-node status reads the daemon's status file and displays
@@ -142,7 +143,7 @@ Flags:
 'uninstall':
   hermes-node uninstall removes the binary, stops and removes the
   background service (systemd/launchd), and leaves the config directory
-  in place. Add --purge to also remove ~/.hermes-nodes/ (all config,
+  in place. Add --purge to also remove ~/.hermes-node/ (all config,
   tokens, and audit logs). Use --dry-run to preview what would be
   removed without making changes.
 
@@ -427,12 +428,12 @@ func runPair(args []string, configPath string, stdout, stderr io.Writer) int {
 //
 // Flags:
 //
-//	--purge    also remove ~/.hermes-nodes/ (config, audit log, tokens)
+//	--purge    also remove ~/.hermes-node/ (config, audit log, tokens)
 //	--dry-run  preview what would be removed without making changes
 func runUninstall(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("hermes-node uninstall", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	purge := fs.Bool("purge", false, "also remove ~/.hermes-nodes/ — THIS DELETES ALL STORED TOKENS AND CONFIG")
+	purge := fs.Bool("purge", false, "also remove ~/.hermes-node/ — THIS DELETES ALL STORED TOKENS AND CONFIG")
 	dryRun := fs.Bool("dry-run", false, "preview changes without removing anything")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -452,7 +453,7 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		binPath = filepath.Join(home, ".local", "bin", "hermes-node")
 	}
-	configDir := filepath.Join(home, ".hermes-nodes")
+	configDir := filepath.Join(home, ".hermes-node")
 	removed := 0
 	errCount := 0
 
@@ -699,6 +700,21 @@ func runValidate(args []string, configPath string, stdout, stderr io.Writer) int
 	}
 	// If no TLS settings are configured, that's fine — no check needed.
 
+	// 5. Proxy URL — validate the URL when set.
+	if cfg.Node.ProxyURL != "" {
+		proxyURL, err := url.Parse(cfg.Node.ProxyURL)
+		if err != nil {
+			fmt.Fprintf(stdout, "  [FAIL] proxy_url: %v\n", err)
+			failed++
+		} else if proxyURL.Scheme != "http" && proxyURL.Scheme != "https" {
+			fmt.Fprintf(stdout, "  [FAIL] proxy_url: scheme %q must be http or https\n", proxyURL.Scheme)
+			failed++
+		} else {
+			fmt.Fprintf(stdout, "  [OK] proxy_url: %s\n", cfg.Node.ProxyURL)
+			passed++
+		}
+	}
+
 	if failed == 0 {
 		fmt.Fprintf(stdout, "\nhermes-node: config is valid (%d checks passed).\n", passed)
 		return 0
@@ -723,6 +739,22 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 	}
 
 	logLevel, _ := logger.ParseLevel(cfg.Node.LogLevel)
+
+	// When running as the inner daemon (HERMES_NODE_INNER set), replace
+	// stdout/stderr with a rotating file so daemon.log auto-rotates.
+	if os.Getenv("HERMES_NODE_INNER") != "" {
+		dlogPath := filepath.Join(getConfigDir(configPath), "daemon.log")
+		rf, err := logger.NewRotatingFile(dlogPath, 10*1024*1024, 5)
+		if err == nil {
+			stdout = rf
+			stderr = rf
+			defer rf.Close()
+		}
+		// If opening the rotating file fails, fall through with the
+		// original stdout/stderr (the parent already set them to the
+		// raw daemon.log fd, so logging still works — just no rotation).
+	}
+
 	log := logger.NewWithWriters(logLevel, stdout, stderr)
 
 	auditLog, err := audit.New(cfg.Node.LogPath)
@@ -809,6 +841,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				Arch:         runtime.GOARCH,
 				Capabilities: []string{"exec", "read", "write"},
 				TLSConfig:    tlsCfg,
+				ProxyURL:     cfg.Node.ProxyURL,
 			})
 		},
 		// Setup is invoked once per (re)connect. We build a fresh
@@ -863,7 +896,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				_ = old.Close()
 			}
 
-			session, err := execer.NewSession(ctx)
+			session, err := execer.NewSession(ctx, cfg.Node.AllowedPaths)
 			if err != nil {
 				return fmt.Errorf("start shell: %w", err)
 			}
@@ -940,7 +973,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 // ---- update subcommand ----
 
 const (
-	githubRepo = "blaspat/hermes-nodes"
+	githubRepo = "blaspat/hermes-node"
 	githubDL   = "https://github.com/" + githubRepo + "/releases/download"
 )
 
@@ -1336,7 +1369,7 @@ func runStop(configPath string, stdout, stderr io.Writer) int {
 }
 
 // getConfigDir returns the config directory from a config file path.
-// e.g., "/home/user/.hermes-nodes/config.toml" → "/home/user/.hermes-nodes"
+// e.g., "/home/user/.hermes-node/config.toml" → "/home/user/.hermes-node"
 func getConfigDir(configPath string) string {
 	if configPath == "" {
 		return ""
@@ -1355,5 +1388,5 @@ func defaultConfigPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("could not determine home directory for default config path: %w", err)
 	}
-	return filepath.Join(home, ".hermes-nodes", "config.toml"), nil
+	return filepath.Join(home, ".hermes-node", "config.toml"), nil
 }

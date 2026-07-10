@@ -1,6 +1,6 @@
-# Contributing to hermes-nodes
+# Contributing to hermes-node
 
-Thanks for your interest. hermes-nodes is a small Go binary (≈1000 LOC) with
+Thanks for your interest. hermes-node is a small Go binary (≈1000 LOC) with
 a single maintainer, a stable protocol, and a focus on security over features.
 
 ## Code of conduct
@@ -14,7 +14,7 @@ before filing public issues.
 - **Bug fixes** with a regression test
 - **Security hardening** with a documented threat model
 - **PROTOCOL.md drift fixes** — the protocol is canonical in
-  [`hermes-nodes/PROTOCOL.md`](./PROTOCOL.md) on the Go side. If you change
+  [`hermes-node/PROTOCOL.md`](./PROTOCOL.md) on the Go side. If you change
   wire behavior, update PROTOCOL.md in the same commit.
 - **Cross-compile / install-script fixes** — anything that makes
   `install/install.sh` or `install/install.ps1` work on a real laptop we
@@ -40,7 +40,7 @@ go test ./...
 # Run with race detector
 go test -race ./...
 
-# Run e2e tests (requires the Python test harness from hermes-nodes-plugin)
+# Run e2e tests (requires the Python test harness from hermes-node-plugin)
 go test ./tests/e2e/... -tags=e2e
 ```
 
@@ -64,8 +64,8 @@ go test ./tests/e2e/... -tags=e2e
 
 ## Cross-repo changes
 
-hermes-nodes shares a wire protocol with
-[hermes-nodes-plugin](https://github.com/blaspat/hermes-nodes-plugin). If your
+hermes-node shares a wire protocol with
+[hermes-node-plugin](https://github.com/blaspat/hermes-node-plugin). If your
 change touches the wire format:
 
 1. Update PROTOCOL.md on the Go side first (canonical)

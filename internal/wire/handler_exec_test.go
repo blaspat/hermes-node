@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blaspat/hermes-nodes/internal/audit"
-	"github.com/blaspat/hermes-nodes/internal/exec"
-	"github.com/blaspat/hermes-nodes/internal/fs"
+	"github.com/blaspat/hermes-node/internal/audit"
+	"github.com/blaspat/hermes-node/internal/exec"
+	"github.com/blaspat/hermes-node/internal/fs"
 )
 
 // recordingAudit is an AuditWriter that captures every entry the
@@ -835,7 +835,7 @@ func TestExecHandler_EndToEnd(t *testing.T) {
 	// Real shell session.
 	shellCwd := t.TempDir()
 	t.Setenv("HERMES_CWD", shellCwd)
-	shell, err := exec.NewSession(context.Background())
+	shell, err := exec.NewSession(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("exec.NewSession: %v", err)
 	}
@@ -904,7 +904,7 @@ func TestExecHandler_EndToEnd_NonZeroExit(t *testing.T) {
 
 	shellCwd := t.TempDir()
 	t.Setenv("HERMES_CWD", shellCwd)
-	shell, err := exec.NewSession(context.Background())
+	shell, err := exec.NewSession(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("exec.NewSession: %v", err)
 	}

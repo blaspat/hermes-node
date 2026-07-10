@@ -1,4 +1,4 @@
-// Package fs provides filesystem utilities for the hermes-nodes agent,
+// Package fs provides filesystem utilities for the hermes-node agent,
 // including path-allowlist enforcement that rejects symlinks pointing
 // outside a configured set of roots.
 package fs

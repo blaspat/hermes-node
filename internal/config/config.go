@@ -35,6 +35,7 @@ type NodeConfig struct {
 	AllowedPaths   []string `toml:"allowed_paths"`
 	LogPath        string   `toml:"log_path"`
 	LogLevel       string   `toml:"log_level"`
+	ProxyURL       string   `toml:"proxy_url"`
 	BackoffInitial string   `toml:"backoff_initial"`
 	BackoffMax     string   `toml:"backoff_max"`
 	BackoffFactor  float64  `toml:"backoff_factor"`
@@ -187,7 +188,7 @@ func checkFileMode(path string) error {
 }
 
 // defaultLogPath returns the audit log path used when none is configured:
-// $HOME/.hermes-nodes/audit.log. It returns an error if the home directory
+// $HOME/.hermes-node/audit.log. It returns an error if the home directory
 // cannot be determined, rather than silently producing a relative path that
 // would resolve to the current working directory.
 func defaultLogPath() (string, error) {
@@ -195,5 +196,5 @@ func defaultLogPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("could not determine home directory for default log path: %w", err)
 	}
-	return filepath.Join(home, ".hermes-nodes", "audit.log"), nil
+	return filepath.Join(home, ".hermes-node", "audit.log"), nil
 }

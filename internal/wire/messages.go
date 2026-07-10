@@ -1,4 +1,4 @@
-// Package wire implements the client side of the hermes-nodes WSS
+// Package wire implements the client side of the hermes-node WSS
 // protocol. This file defines the JSON message shapes sent on the
 // wire; see PROTOCOL.md \u00a72-3.5 for the contract.
 package wire

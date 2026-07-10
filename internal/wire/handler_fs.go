@@ -49,8 +49,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/blaspat/hermes-nodes/internal/audit"
-	fspkg "github.com/blaspat/hermes-nodes/internal/fs"
+	"github.com/blaspat/hermes-node/internal/audit"
+	fspkg "github.com/blaspat/hermes-node/internal/fs"
 )
 
 // MaxFileBytes is the per-call cap applied to read and write. It
