@@ -863,7 +863,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				_ = old.Close()
 			}
 
-			session, err := execer.NewSession(ctx)
+			session, err := execer.NewSession(ctx, cfg.Node.AllowedPaths)
 			if err != nil {
 				return fmt.Errorf("start shell: %w", err)
 			}
