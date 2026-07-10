@@ -142,10 +142,11 @@ type Session struct {
 // bash keeps a job-control state machine, which makes it flush
 // stdout promptly.
 //
-// The session's initial cwd is the value of the HERMES_CWD env var
-// if set, otherwise the calling process's current working
-// directory.
-func NewSession(ctx context.Context) (*Session, error) {
+// The session's initial cwd is the first entry in allowedPaths (if
+// non-empty), otherwise the value of the HERMES_CWD env var if set,
+// otherwise the calling process's current working directory. This
+// ensures the shell starts inside allowed territory.
+func NewSession(ctx context.Context, allowedPaths []string) (*Session, error) {
 	id, err := randomID(8)
 	if err != nil {
 		return nil, fmt.Errorf("shell: generate session id: %w", err)
@@ -156,7 +157,13 @@ func NewSession(ctx context.Context) (*Session, error) {
 		return nil, fmt.Errorf("shell: bash not found in PATH: %w", err)
 	}
 
-	initialCwd := os.Getenv("HERMES_CWD")
+	initialCwd := ""
+	if len(allowedPaths) > 0 {
+		initialCwd = allowedPaths[0]
+	}
+	if initialCwd == "" {
+		initialCwd = os.Getenv("HERMES_CWD")
+	}
 	if initialCwd == "" {
 		initialCwd, err = os.Getwd()
 		if err != nil {
@@ -196,6 +203,19 @@ func NewSession(ctx context.Context) (*Session, error) {
 
 	go s.captureStderr(stderr)
 	go s.demux(stdout)
+
+	// If we have an initial cwd from allowedPaths, cd there now so the
+	// shell starts inside allowed territory. This is a one-shot setup
+	// command run before the first user call.
+	if len(allowedPaths) > 0 {
+		cdCmd := "cd " + escapeSingleQuotes(initialCwd)
+		_, _, _, cdErr := s.Run(context.Background(), cdCmd)
+		if cdErr != nil {
+			_ = s.Close()
+			return nil, fmt.Errorf("shell: cd to allowed path %q: %w", initialCwd, cdErr)
+		}
+	}
+
 	return s, nil
 }
 

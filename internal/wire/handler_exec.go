@@ -167,17 +167,38 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Pre-flight: resolve the effective working directory. When the
-	// call omits cwd we skip the allowlist check entirely — the
-	// operator's shell default cwd is trusted. When the call
-	// explicitly provides a cwd we validate it against the allowlist
-	// so a rogue client can't jump to an arbitrary directory.
-	// An empty Allowed list rejects every explicit cwd (deny-by-
-	// default); operators who want wide-open access must configure
-	// an explicit root, e.g. allowed_paths = ["/"].
+	// Resolve the effective working directory. When the call provides
+	// an explicit cwd we validate it against the allowlist. When the
+	// call omits cwd we resolve it from the shell's current working
+	// directory and validate *that* against the allowlist, so a rogue
+	// client cannot bypass the allowlist by simply omitting the cwd
+	// field.
+	//
+	// An empty Allowed list (nil/empty) is treated differently
+	// depending on whether the cwd was explicit:
+	//   - explicit cwd + empty Allowed → reject (deny-by-default)
+	//   - implicit cwd + empty Allowed → allow (backward compatible:
+	//     the operator hasn't configured allowed_paths, so the shell
+	//     cwd from the first allowed path — or lack thereof — is
+	//     trusted).
 	cwd := p.Cwd
+	explicitCwd := cwd != ""
 	var canonical string
-	if cwd != "" {
+
+	if !explicitCwd {
+		// Resolve from the shell. The shell's Cwd() reflects its
+		// actual working directory (updated by the CWD marker after
+		// every Run), so this is always current.
+		cwd = h.Shell.Cwd()
+	}
+
+	// When the allowlist is empty and the cwd is explicit, fs.Check
+	// rejects with "no roots configured" — we let that happen. When
+	// the allowlist is empty and the cwd is implicit we skip the
+	// check entirely (backward compatible).
+	shouldCheck := explicitCwd || len(h.Allowed) > 0
+
+	if cwd != "" && shouldCheck {
 		ok, canon, err := fs.Check(h.Allowed, cwd)
 		canonical = canon
 		if err != nil || !ok {

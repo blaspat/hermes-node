@@ -832,7 +832,7 @@ func TestExecHandler_EndToEnd(t *testing.T) {
 	// Real shell session.
 	shellCwd := t.TempDir()
 	t.Setenv("HERMES_CWD", shellCwd)
-	shell, err := exec.NewSession(context.Background())
+	shell, err := exec.NewSession(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("exec.NewSession: %v", err)
 	}
@@ -901,7 +901,7 @@ func TestExecHandler_EndToEnd_NonZeroExit(t *testing.T) {
 
 	shellCwd := t.TempDir()
 	t.Setenv("HERMES_CWD", shellCwd)
-	shell, err := exec.NewSession(context.Background())
+	shell, err := exec.NewSession(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("exec.NewSession: %v", err)
 	}

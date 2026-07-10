@@ -21,7 +21,7 @@ func newTestSession(t *testing.T) *Session {
 	t.Helper()
 	t.Setenv("HERMES_CWD", t.TempDir())
 
-	s, err := NewSession(context.Background())
+	s, err := NewSession(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
