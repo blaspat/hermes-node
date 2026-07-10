@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -174,13 +175,18 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// client cannot bypass the allowlist by simply omitting the cwd
 	// field.
 	//
+	// If the cwd is outside the allowlist and at least one allowed
+	// path is configured, we auto-cd to the first allowed path and
+	// prepend a warning to stderr — the command still runs. This
+	// prevents the operator from locking themselves out with a
+	// stray `cd /etc` while still keeping the guardrail visible.
+	//
 	// An empty Allowed list (nil/empty) is treated differently
 	// depending on whether the cwd was explicit:
 	//   - explicit cwd + empty Allowed → reject (deny-by-default)
 	//   - implicit cwd + empty Allowed → allow (backward compatible:
 	//     the operator hasn't configured allowed_paths, so the shell
-	//     cwd from the first allowed path — or lack thereof — is
-	//     trusted).
+	//     cwd is trusted).
 	cwd := p.Cwd
 	explicitCwd := cwd != ""
 	var canonical string
@@ -198,25 +204,35 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// check entirely (backward compatible).
 	shouldCheck := explicitCwd || len(h.Allowed) > 0
 
+	var cwdNote string
 	if cwd != "" && shouldCheck {
 		ok, canon, err := fs.Check(h.Allowed, cwd)
 		canonical = canon
 		if err != nil || !ok {
-			auditTarget := canonical
-			if auditTarget == "" {
-				auditTarget = p.Command
+			if len(h.Allowed) > 0 {
+				// Outside allowlist but we have allowed paths to
+				// fall back to. Auto-cd to the first one.
+				firstAllowed := h.Allowed[0]
+				// Shell-quote: wrap in single quotes, escape any
+				// embedded single quotes per POSIX convention.
+				sq := "'" + strings.ReplaceAll(firstAllowed, "'", "'\\''") + "'"
+				p.Command = "cd " + sq + " 2>/dev/null\n" + p.Command
+				canonical = firstAllowed
+				cwdNote = "[hermes-node: cwd was outside allowed_paths — auto-cd'd to " + firstAllowed + "]"
+			} else {
+				// Explicit cwd with no allowlist configured → reject.
+				h.auditExec(p, audit.Entry{
+					TS:     h.now(),
+					Action: "exec",
+					Target: canonical,
+					Status: "error",
+				})
+				return NewExecResultEnvelope(requestID, ExecResultPayload{
+					Status:     "error",
+					ExitCode:   -1,
+					DurationMS: 0,
+				}), nil
 			}
-			h.auditExec(p, audit.Entry{
-				TS:     h.now(),
-				Action: "exec",
-				Target: auditTarget,
-				Status: "error",
-			})
-			return NewExecResultEnvelope(requestID, ExecResultPayload{
-				Status:     "error",
-				ExitCode:   -1,
-				DurationMS: 0,
-			}), nil
 		}
 	}
 
@@ -232,6 +248,16 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	start := h.now()
 	stdout, stderr, exit, runErr := h.Shell.Run(callCtx, cwd, p.Command)
 	duration := h.now().Sub(start)
+
+	// Prepend auto-cd warning to stderr if the cwd was outside
+	// the allowlist.
+	if cwdNote != "" {
+		if stderr == "" {
+			stderr = cwdNote + "\n"
+		} else {
+			stderr = cwdNote + "\n" + stderr
+		}
+	}
 
 	// Cap each stream independently. capOutput is total to the
 	// caller; the marker suffix means operators can grep for

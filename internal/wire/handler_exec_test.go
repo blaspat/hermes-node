@@ -297,19 +297,16 @@ func TestExecHandler_CwdAllowlistAccepted(t *testing.T) {
 	}
 }
 
-// TestExecHandler_CwdAllowlistRejected sets a temp dir as the only
-// allowed root, sends an exec with cwd pointing *outside* that
-// root, and asserts the shell was never invoked. The response is
-// status=error, exit=-1. This is the security guardrail: a server
-// cannot trick the node into running a command outside the
-// operator-approved roots.
-func TestExecHandler_CwdAllowlistRejected(t *testing.T) {
+// TestExecHandler_CwdAllowlistAutoCd verifies that an exec with
+// an explicit cwd outside the allowlist is auto-cd'd to the first
+// allowed path and the command still runs (with a warning in stderr).
+func TestExecHandler_CwdAllowlistAutoCd(t *testing.T) {
 	allowedDir := t.TempDir()
 	rejectedDir := t.TempDir() // outside allowedDir
 	pair := newConnPair(t)
 	d := newTestDispatcher(t, pair.client)
 
-	shell := newMockExecuter("", "", 0, nil)
+	shell := newMockExecuter("ran\n", "", 0, nil)
 	rec := &recordingAudit{}
 	h := newTestExecHandler(t, shell, []string{allowedDir}, rec)
 	if err := d.Register(TypeExec, h.Handle); err != nil {
@@ -320,36 +317,32 @@ func TestExecHandler_CwdAllowlistRejected(t *testing.T) {
 	writeServerJSON(t, pair.server, map[string]any{
 		"id":      "req-cwd-bad",
 		"type":    "exec",
-		"command": "rm -rf /",
+		"command": "echo ran",
 		"cwd":     rejectedDir,
 	})
 
 	resp := readEnvelope(t, pair)
 	if resp["type"] != "exec_result" {
-		t.Fatalf("response type: got %q, want exec_result (denial still gets a result, not a protocol error)", resp["type"])
+		t.Fatalf("response type: got %q, want exec_result", resp["type"])
 	}
-	if resp["status"] != "error" {
-		t.Errorf("response status: got %q, want error", resp["status"])
+	if resp["status"] != "ok" {
+		t.Errorf("response status: got %q, want ok (auto-cd to allowed dir)", resp["status"])
 	}
-	if code, _ := resp["exit_code"].(float64); int(code) != -1 {
-		t.Errorf("response exit_code: got %v, want -1 (denial, no shell call)", resp["exit_code"])
+	if code, _ := resp["exit_code"].(float64); int(code) != 0 {
+		t.Errorf("response exit_code: got %v, want 0", resp["exit_code"])
 	}
-	// Shell must NOT have been called.
-	if got := shell.calls.Load(); got != 0 {
-		t.Errorf("shell invocations: got %d, want 0 (pre-flight must block the call)", got)
+	// Shell must have been called (auto-cd wraps the command).
+	if got := shell.calls.Load(); got != 1 {
+		t.Errorf("shell invocations: got %d, want 1", got)
 	}
-	// Audit must have recorded the denied attempt.
-	entries := rec.snapshot()
-	if len(entries) != 1 {
-		t.Fatalf("audit entries: got %d, want 1 (the denial)", len(entries))
-	}
-	if entries[0].Status != "error" {
-		t.Errorf("audit status: got %q, want error", entries[0].Status)
+	// Command was modified — should contain "cd allowedDir" prefix.
+	cmd, _ := shell.cmd.Load().(string)
+	if !contains(cmd, "cd ") || !contains(cmd, allowedDir) {
+		t.Errorf("shell cmd: got %q, want cd to %q", cmd, allowedDir)
 	}
 }
 
 // TestExecHandler_CwdAllowlistEmpty_RejectsAll verifies that a
-// handler with no allowed list (or an empty one) rejects every
 // cwd (deny-by-default). Operators who want wide-open access must
 // configure an explicit root, e.g. allowed_paths = ["/"].
 func TestExecHandler_CwdAllowlistEmpty_RejectsAll(t *testing.T) {
@@ -381,14 +374,14 @@ func TestExecHandler_CwdAllowlistEmpty_RejectsAll(t *testing.T) {
 }
 
 // TestExecHandler_RejectsImplicitCwdOutsideAllowlist verifies that
-// an exec with no cwd field is still checked against the allowlist
-// by resolving the cwd from the shell. If the shell's current cwd
-// is outside the allowlist, the call must be rejected.
+// an exec with no cwd field where the shell's cwd is outside the
+// allowlist auto-cds to the first allowed path and runs the command
+// with a warning (instead of rejecting).
 func TestExecHandler_RejectsImplicitCwdOutsideAllowlist(t *testing.T) {
 	pair := newConnPair(t)
 	d := newTestDispatcher(t, pair.client)
 
-	shell := newMockExecuter("", "", 0, nil)
+	shell := newMockExecuter("pwd\n", "", 0, nil)
 	shell.cwd = "/etc"                                             // shell is in /etc
 	h := newTestExecHandler(t, shell, []string{"/home/user"}, nil) // allowlist = /home
 	if err := d.Register(TypeExec, h.Handle); err != nil {
@@ -405,16 +398,23 @@ func TestExecHandler_RejectsImplicitCwdOutsideAllowlist(t *testing.T) {
 
 	resp := readEnvelope(t, pair)
 	if resp["type"] != "exec_result" {
-		t.Fatalf("response type: got %q, want exec_result (denial still gets a result)", resp["type"])
+		t.Fatalf("response type: got %q, want exec_result", resp["type"])
 	}
-	if resp["status"] != "error" {
-		t.Errorf("response status: got %q, want error (implicit cwd %q outside allowlist)", resp["status"], "/etc")
+	// Auto-cd means the command runs successfully.
+	if resp["status"] != "ok" {
+		t.Errorf("response status: got %q, want ok (auto-cd from %q to first allowed path)", resp["status"], "/etc")
 	}
-	if code, _ := resp["exit_code"].(float64); int(code) != -1 {
-		t.Errorf("response exit_code: got %v, want -1 (denial, no shell call)", resp["exit_code"])
+	if code, _ := resp["exit_code"].(float64); int(code) != 0 {
+		t.Errorf("response exit_code: got %v, want 0", resp["exit_code"])
 	}
-	if got := shell.calls.Load(); got != 0 {
-		t.Errorf("shell invocations: got %d, want 0 (pre-flight must block the call)", got)
+	// Shell was called (once, with the cd-wrapped command).
+	if got := shell.calls.Load(); got != 1 {
+		t.Errorf("shell invocations: got %d, want 1", got)
+	}
+	// Command was wrapped with a cd to /home/user.
+	cmd, _ := shell.cmd.Load().(string)
+	if !contains(cmd, "cd ") || !contains(cmd, "/home/user") {
+		t.Errorf("shell cmd: got %q, want cd to /home/user", cmd)
 	}
 }
 
@@ -772,8 +772,8 @@ func TestExecHandler_FsCheckIntegration(t *testing.T) {
 	shell := newMockExecuter("", "", 0, nil)
 	h := newTestExecHandler(t, shell, []string{dir}, nil)
 
-	// Cwd outside the allowed root: handler must reject and the
-	// result must be status=error, exit=-1.
+	// Cwd outside the allowed root: handler auto-cds to dir and
+	// the result must be status=ok (the command runs after cd).
 	env, err := h.Handle(context.Background(), "req-int-bad", map[string]any{
 		"command": "ls",
 		"cwd":     "/etc/secret",
@@ -785,8 +785,11 @@ func TestExecHandler_FsCheckIntegration(t *testing.T) {
 	if err := reMarshalInto(env.Payload, &r); err != nil {
 		t.Fatalf("decode result: %v", err)
 	}
-	if r.Status != "error" {
-		t.Errorf("status: got %q, want error (cwd /etc/secret is outside %q)", r.Status, dir)
+	if r.Status != "ok" {
+		t.Errorf("status: got %q, want ok (auto-cd to %q)", r.Status, dir)
+	}
+	if !contains(r.Stderr, "outside allowed_paths") {
+		t.Errorf("stderr: got %q, want warning about auto-cd", r.Stderr)
 	}
 
 	// fs.Check must agree: /etc/secret is NOT under dir.
