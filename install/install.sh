@@ -251,7 +251,7 @@ latest_release_tag() {
     # the API endpoint to get the tag directly. Anonymous requests are
     # rate-limited to 60/h per IP, which is fine for occasional use.
     curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
-      | jq -r '.tagName // empty' 2>/dev/null \
+      | jq -r '.tag_name // empty' 2>/dev/null \
       || return 1
   else
     warn "neither gh nor curl is on PATH; cannot look up the latest release"
