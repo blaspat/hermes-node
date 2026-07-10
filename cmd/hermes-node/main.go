@@ -940,7 +940,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 // ---- update subcommand ----
 
 const (
-	githubRepo = "blaspat/hermes-nodes"
+	githubRepo = "blaspat/hermes-node"
 	githubDL   = "https://github.com/" + githubRepo + "/releases/download"
 )
 
