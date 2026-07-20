@@ -3,12 +3,20 @@
 // merges stderr into stdout; the adapter preserves that contract.
 package exec
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
-// SessionAdapter is the bridge *Session → wire.Executer. The
-// `target` argument is accepted to match the forward-compatible
-// Executer signature; on 1.4a the shell does its own cwd
-// handling so target is dropped on the floor.
+// SessionAdapter is the bridge *Session → wire.Executer.
+//
+// The `target` argument is the validated, symlink-resolved working
+// directory the caller intended the command to run in. When
+// non-empty, the adapter prepends an explicit ``cd <target>`` to
+// the command so it executes in that directory regardless of the
+// bash session's current state. When empty, the command runs in
+// whatever cwd the shell's previous command left behind (backward-
+// compatible behaviour).
 type SessionAdapter struct {
 	S *Session
 }
@@ -19,9 +27,19 @@ func NewSessionAdapter(s *Session) *SessionAdapter {
 	return &SessionAdapter{S: s}
 }
 
-// Run forwards to the underlying session. See SessionAdapter
-// for the target-discard rationale.
-func (a *SessionAdapter) Run(ctx context.Context, _, cmd string) (string, string, int, error) {
+// shellQuote wraps s in single quotes, escaping any embedded
+// single quotes per POSIX convention.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// Run forwards to the underlying session, prepending an explicit
+// `cd <target>` when target is non-empty so the command executes
+// in the directory the caller asked for.
+func (a *SessionAdapter) Run(ctx context.Context, target, cmd string) (string, string, int, error) {
+	if target != "" {
+		cmd = "cd " + shellQuote(target) + "\n" + cmd
+	}
 	return a.S.Run(ctx, cmd)
 }
 

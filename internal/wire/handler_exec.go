@@ -246,7 +246,7 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// ignored. The protocol field is preserved in the decoded
 	// payload so the upgrade is mechanical.
 	start := h.now()
-	stdout, stderr, exit, runErr := h.Shell.Run(callCtx, cwd, p.Command)
+	stdout, stderr, exit, runErr := h.Shell.Run(callCtx, canonical, p.Command)
 	duration := h.now().Sub(start)
 
 	// Prepend auto-cd warning to stderr if the cwd was outside

@@ -194,7 +194,11 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 	// Stat before reading. We want a distinct file_not_found
 	// error so the server can decide whether to retry (network
 	// mount slow to converge) or surface to the operator.
-	info, err := fsys.IO.Stat(p.Path)
+	// Use the canonical (symlink-resolved) path — NOT the raw
+	// p.Path — to close the TOCTOU window where a symlink
+	// swap between checkAllowed and Stat would bypass the
+	// allowlist.
+	info, err := fsys.IO.Stat(canonical)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			fsys.audit("read", canonical, "error", 0)
@@ -220,7 +224,7 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 		}), nil
 	}
 
-	data, err := fsys.IO.ReadFile(p.Path)
+	data, err := fsys.IO.ReadFile(canonical)
 	if err != nil {
 		fsys.audit("read", canonical, "error", 0)
 		return NewReadResultEnvelope(requestID, ReadResultPayload{
@@ -337,7 +341,7 @@ func (fsys *FileSystem) WriteHandler(ctx context.Context, requestID string, payl
 	// create a directory tree — a write to a non-existent
 	// parent returns ENOENT and surfaces as io_error.
 	const filePerm os.FileMode = 0o644
-	n, err := fsys.IO.WriteFile(p.Path, data, filePerm, mode)
+	n, err := fsys.IO.WriteFile(canonical, data, filePerm, mode)
 	if err != nil {
 		fsys.audit("write", canonical, "error", int64(0))
 		errCode := "io_error"
