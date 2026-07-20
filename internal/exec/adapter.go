@@ -12,7 +12,7 @@ import (
 //
 // The `target` argument is the validated, symlink-resolved working
 // directory the caller intended the command to run in. When
-// non-empty, the adapter prepends an explicit ``cd <target>`` to
+// non-empty, the adapter prepends an explicit "cd <target>" to
 // the command so it executes in that directory regardless of the
 // bash session's current state. When empty, the command runs in
 // whatever cwd the shell's previous command left behind (backward-
