@@ -33,14 +33,7 @@ const (
 	LevelError
 )
 
-var levelNames = map[Level]string{
-	LevelDebug: "DEBUG",
-	LevelInfo:  "INFO",
-	LevelWarn:  "WARN",
-	LevelError: "ERROR",
-}
-
-// ParseLevel converts a string to a Level. Returns LevelInfo and
+// ParseLevel maps a case-insensitive string to a Level.
 // false when the string is not recognised.
 func ParseLevel(s string) (Level, bool) {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
