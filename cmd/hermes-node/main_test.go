@@ -326,12 +326,6 @@ func (fs *fakeServer) URL() string {
 
 func (fs *fakeServer) Close() { fs.srv.Close() }
 
-func (fs *fakeServer) setNextResp(env map[string]any) {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	fs.nextResp = env
-}
-
 func (fs *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	conn, err := fs.upgrader.Upgrade(w, r, nil)
 	if err != nil {

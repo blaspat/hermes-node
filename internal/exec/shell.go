@@ -72,7 +72,6 @@ type pendingCall struct {
 // the END marker (or EOF) for a call.
 type runResult struct {
 	stdout  string
-	stderr  string
 	exitSet bool
 	exit    int
 	cwdSet  bool

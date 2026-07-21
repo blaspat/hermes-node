@@ -23,7 +23,6 @@ package wire
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -675,9 +674,3 @@ func containsSubstr(haystack, needle string) bool {
 	}
 	return false
 }
-
-// Ensure unused imports are referenced (the linter complains
-// about fmt otherwise). These are intentional — fmt is used in
-// the test rig's URL builders and errors is used in the
-// dispatch-panic test.
-var _ = fmt.Sprintf
