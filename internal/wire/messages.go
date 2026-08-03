@@ -24,6 +24,9 @@ const (
 	TypeAuthOK   MessageType = "auth_ok"
 	TypeAuthErr  MessageType = "auth_err"
 
+	// E2E encrypted envelope (post-handshake).
+	TypeEnc MessageType = "enc"
+
 	// Server-initiated calls (Task 1.6 dispatch loop).
 	TypeExec        MessageType = "exec"
 	TypeExecResult  MessageType = "exec_result"
@@ -100,6 +103,8 @@ type HelloPayload struct {
 	Platform        string   `json:"platform"`
 	Arch            string   `json:"arch"`
 	Capabilities    []string `json:"capabilities"`
+	E2E             *bool    `json:"e2e,omitempty"`
+	ECDHPub         string   `json:"ecdh_pub,omitempty"`
 }
 
 // NewHelloEnvelope builds a `hello` envelope ready to send. ts is
@@ -127,6 +132,8 @@ type HelloAckPayload struct {
 	ProtocolVersion string `json:"protocol_version"`
 	SessionID       string `json:"session_id"`
 	ServerTime      string `json:"server_time"`
+	ECDHPub         string `json:"ecdh_pub,omitempty"`
+	Salt            string `json:"salt,omitempty"`
 }
 
 // HelloErrPayload is the body of a `hello_err` message (PROTOCOL.md
@@ -137,10 +144,12 @@ type HelloErrPayload struct {
 	ServerMaxVersion string `json:"server_max_version,omitempty"`
 }
 
-// AuthPayload is the body of an `auth` message (PROTOCOL.md \u00a73.4).
+// AuthPayload is the body of an `auth` message. When E2E is active,
+// Token is empty and Proof contains the HMAC client proof.\n// In legacy (plaintext) mode, Token is present and Proof is empty.
 type AuthPayload struct {
 	NodeName string `json:"node_name"`
-	Token    string `json:"token"`
+	Token    string `json:"token,omitempty"`
+	Proof    string `json:"proof,omitempty"`
 }
 
 // NewAuthEnvelope builds an `auth` envelope. The server validates
@@ -156,19 +165,24 @@ func NewAuthEnvelope(nodeName, token string) Envelope {
 	}
 }
 
-// AuthOKPayload is the body of an `auth_ok` message (PROTOCOL.md
-// \u00a73.5). The session_id is informational on the client side \u2014
-// the server uses it to correlate logs.
+// AuthOKPayload is the body of an `auth_ok` message. In E2E mode,
+// Proof contains the HMAC server proof so the client can verify
+// the server knows the pairing token.
 type AuthOKPayload struct {
 	SessionID string `json:"session_id"`
+	Proof     string `json:"proof,omitempty"`
 }
 
-// AuthErrPayload is the body of an `auth_err` message (PROTOCOL.md
-// \u00a73.5). The client treats this as a fatal handshake failure and
-// surfaces the reason to the operator.
+// AuthErrPayload is the body of an `auth_err` message.
 type AuthErrPayload struct {
 	Reason string `json:"reason"`
 	Code   int    `json:"code"`
+}
+
+// EncPayload is the body of an `enc` message. Data is the base64url-encoded
+// ciphertext (nonce || ct || tag) for E2E-encrypted operational messages.
+type EncPayload struct {
+	Data string `json:"data"`
 }
 
 // reMarshalInto takes whatever was in the envelope's payload slot

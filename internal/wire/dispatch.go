@@ -41,7 +41,8 @@ type Handler func(ctx context.Context, requestID string, payload map[string]any)
 // registered with Register. The reserved types (ping / pong / bye /
 // error) are handled in-line by Run and cannot be overridden.
 type Dispatcher struct {
-	conn *websocket.Conn
+	conn   *websocket.Conn
+	client *Client // for E2E read/write wrappers
 
 	// handlers maps server-originated call types to their
 	// handlers. The lookup uses MessageType equality.
@@ -92,6 +93,7 @@ type Dispatcher struct {
 func NewDispatcher(c *Client) *Dispatcher {
 	return &Dispatcher{
 		conn:         c.Conn(),
+		client:       c,
 		handlers:     make(map[MessageType]Handler),
 		ReadTimeout:  DefaultPongTimeout + 30*time.Second,
 		WriteTimeout: 10 * time.Second,
@@ -188,34 +190,14 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 // liveness clock can be bumped — PROTOCOL.md §6 says any received
 // message counts as liveness, not just pong.
 func (d *Dispatcher) readOne(ctx context.Context) (Envelope, error) {
-	if err := d.conn.SetReadDeadline(deadlineFromCtx(ctx, d.ReadTimeout)); err != nil {
-		return Envelope{}, fmt.Errorf("wire: set read deadline: %w", err)
-	}
-	_, raw, err := d.conn.ReadMessage()
-	if err != nil {
-		return Envelope{}, fmt.Errorf("wire: read: %w", err)
-	}
-	if d.OnRead != nil {
-		d.OnRead()
-	}
-	var env Envelope
-	if err := decodeEnvelope(raw, &env); err != nil {
-		return Envelope{}, fmt.Errorf("wire: decode envelope: %w", err)
-	}
-	return env, nil
+	return d.client.ReadE2E(ctx)
 }
 
 // writeOne sends one envelope with the configured write deadline.
 // The envelope's MarshalJSON flattens its typed payload into the
 // top-level wire shape (see messages.go).
 func (d *Dispatcher) writeOne(ctx context.Context, env Envelope) error {
-	if err := d.conn.SetWriteDeadline(deadlineFromCtx(ctx, d.WriteTimeout)); err != nil {
-		return fmt.Errorf("wire: set write deadline: %w", err)
-	}
-	if err := d.conn.WriteJSON(env); err != nil {
-		return fmt.Errorf("wire: write: %w", err)
-	}
-	return nil
+	return d.client.WriteE2E(ctx, env)
 }
 
 // WriteEnvelope sends one envelope on the connection from outside
