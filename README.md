@@ -8,6 +8,7 @@ Standalone Go binary that pairs a remote laptop with a Hermes Agent brain over W
 - [Subcommands](#subcommands)
 - [Configuration](#configuration)
 - [Architecture](#architecture)
+- [End-to-End Encryption](#end-to-end-encryption)
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
@@ -277,6 +278,7 @@ Same protocol on both sides — see [`PROTOCOL.md`](./PROTOCOL.md).
 - **Full audit log** — every call is recorded in append-only JSONL with automatic rotation at 50 MB (keeps 5 files).
 - **TLS 1.3 required** — public CAs work out of the box; custom CA and cert pinning supported for self-signed deployments.
 - **Deny-by-default security** — empty `allowed_paths` rejects all paths. The allowlist is enforced on the laptop — the server cannot bypass it.
+- **End-to-end encryption** — X25519 ECDH + AES-256-GCM encrypts all operational messages. The pairing token is never transmitted on the wire after initial pairing. See [End-to-End Encryption](#end-to-end-encryption).
 
 ### What it cannot do (v0.2, by design)
 - No camera, screen, browser, mic, push notifications, or location
@@ -286,9 +288,54 @@ Same protocol on both sides — see [`PROTOCOL.md`](./PROTOCOL.md).
 - No GUI pairing flow (text token only)
 - No cross-platform state sync (cwd/env is per-laptop)
 
+## End-to-End Encryption
+
+After pairing, all operational messages (`exec`, `read`, `write`, and their results) are encrypted with a per-session AES-256-GCM key. The pairing token is **never transmitted on the wire** — it's only used as an input to key derivation, where both sides independently mix it with an ephemeral ECDH shared secret.
+
+### Handshake
+
+```
+Client                                    Server
+  │  hello { e2e: true, ecdh_pub }        │
+  │ ────────────────────────────────────► │
+  │  hello_ack { ecdh_pub, salt }         │
+  │ ◄──────────────────────────────────── │
+  │                                         
+  │  Both sides compute:
+  │    shared_secret = X25519(my_priv, peer_pub)
+  │    handshake_key = HKDF-SHA256(shared_secret, salt, info || token)
+  │                                         
+  │  auth { proof: HMAC(handshake_key) }  │
+  │ ────────────────────────────────────► │
+  │  auth_ok { proof: HMAC(handshake_key) }│
+  │ ◄──────────────────────────────────── │
+  │                                         
+  │  session_key = HKDF-SHA256(handshake_key)
+  │  ─── AES-256-GCM ACTIVE ───
+```
+
+### Security properties
+
+| Property | How |
+|---|---|
+| **Token never on wire** | Token mixed into HKDF during key derivation — the `auth` message carries only an HMAC proof, not the token itself |
+| **Forward secrecy** | Ephemeral X25519 keys generated per session, discarded after disconnect. Old sessions can't be retroactively decrypted. |
+| **MITM resistance** | Without the pairing token, an attacker can ECDH with both sides but can't forge the HMAC proof → `auth_err` (4001) at the handshake step |
+| **Replay immunity** | New ephemeral keys per session → old proofs don't match |
+
+### What is encrypted
+
+**Encrypted:** `exec`, `exec_result`, `read`, `read_result`, `write`, `write_result`, ping/pong responses.
+
+**Plaintext:** `hello`, `hello_ack`, `auth`, `auth_ok`, `auth_err`, `ping`, `pong`, `rate_limit`.
+
+### Backward compatibility
+
+The client sends `e2e: true` in the `hello` message. If the server doesn't support E2E, it omits `ecdh_pub` from `hello_ack` — the client falls back to legacy plaintext auth automatically.
+
 ## Security
 
-- **Token** is stored in plaintext in `config.toml` (mode 0600). Revoke it on the server with `hermes node revoke --name <name>` — revocation is immediate.
+- **Token** is stored in plaintext in `config.toml` (mode 0600). It is never transmitted on the wire after initial pairing — the E2E handshake uses HMAC proofs instead. Revoke it on the server with `hermes node revoke --name <name>` — revocation is immediate.
 - **Path allowlist** is enforced on the laptop. Each path is symlink-resolved before the check, so symlinks escaping the allowlist are rejected.
 - **TLS 1.3** required for all connections. Custom CA and cert pinning are supported.
 - **Audit log** every call with action, target, duration, exit code, and status.

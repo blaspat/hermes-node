@@ -8,6 +8,7 @@ package wire
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -131,6 +132,10 @@ type Client struct {
 	// auth_ok. Useful for log correlation; not part of the
 	// connection state machine.
 	sessionID string
+
+	// e2eKey is the AES-256-GCM session key derived after the E2E
+	// handshake. When nil, E2E is not active and messages are plaintext.
+	e2eKey []byte
 }
 
 // Conn returns the underlying *websocket.Conn. Reserved for the
@@ -142,6 +147,21 @@ func (c *Client) SessionID() string { return c.sessionID }
 
 // NodeName returns the name this client authenticated as.
 func (c *Client) NodeName() string { return c.nodeName }
+
+// E2EActive returns true when E2E encryption is enabled for this session.
+func (c *Client) E2EActive() bool { return len(c.e2eKey) > 0 }
+
+// WriteE2E sends an envelope. If E2E is active, the payload is encrypted
+// and wrapped in an `enc` envelope. Otherwise, sends plaintext JSON.
+func (c *Client) WriteE2E(ctx context.Context, env Envelope) error {
+	return c.writeE2E(ctx, env)
+}
+
+// ReadE2E reads one envelope. If E2E is active, expects an `enc` frame
+// and decrypts the payload. Otherwise, reads plaintext JSON.
+func (c *Client) ReadE2E(ctx context.Context) (Envelope, error) {
+	return c.readE2E(ctx)
+}
 
 // Connect dials the server, performs the full hello \u2192 hello_ack \u2192
 // auth \u2192 auth_ok handshake, and returns a ready-to-use Client. On
@@ -199,7 +219,12 @@ func Connect(ctx context.Context, opts DialOptions) (*Client, error) {
 // connection. It is split out from Connect so tests can drive the
 // state machine directly with a pre-built *websocket.Conn if needed.
 func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
-	// 1. Send hello.
+	// ── 1. Generate E2E keypair and send hello ──
+	e2eKP, err := GenerateE2EKeyPair()
+	if err != nil {
+		return fmt.Errorf("wire: e2e keypair: %w", err)
+	}
+	e2e := true
 	hello := NewHelloEnvelope(
 		ProtocolVersion,
 		opts.NodeName,
@@ -208,11 +233,23 @@ func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
 		opts.Arch,
 		opts.Capabilities,
 	)
+	hello.Payload = HelloPayload{
+		ProtocolVersion: ProtocolVersion,
+		NodeName:        opts.NodeName,
+		NodeVersion:     opts.NodeVersion,
+		Platform:        opts.Platform,
+		Arch:            opts.Arch,
+		Capabilities:    opts.Capabilities,
+		E2E:             &e2e,
+		ECDHPub:         EncodeBase64(e2eKP.Public),
+	}
+	hello.TS = nowRFC3339()
+
 	if err := c.writeJSON(ctx, opts.HandshakeTimeout, hello); err != nil {
 		return fmt.Errorf("wire: send hello: %w", err)
 	}
 
-	// 2. Await hello_ack or hello_err.
+	// ── 2. Await hello_ack (with ECDH pub + salt) ──
 	ackEnv, err := c.readTyped(ctx, opts.HandshakeTimeout)
 	if err != nil {
 		return fmt.Errorf("wire: read hello_ack: %w", err)
@@ -224,6 +261,85 @@ func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
 			return fmt.Errorf("wire: decode hello_ack: %w", err)
 		}
 		c.sessionID = ack.SessionID
+
+		// If the server returned ECDH pub, do E2E handshake.
+		if ack.ECDHPub == "" {
+			// Legacy server — fall through to plaintext auth.
+			return c.legacyAuth(ctx, opts)
+		}
+
+		// ── 3. E2E: derive handshake key and compute proof ──
+		serverPub, err := DecodeBase64(ack.ECDHPub)
+		if err != nil {
+			return fmt.Errorf("wire: decode server ecdh_pub: %w", err)
+		}
+		saltBytes, err := DecodeBase64(ack.Salt)
+		if err != nil {
+			return fmt.Errorf("wire: decode salt: %w", err)
+		}
+		ecdhShared, err := ECDH(e2eKP.Private, serverPub)
+		if err != nil {
+			return fmt.Errorf("wire: ecdh: %w", err)
+		}
+		handshakeKey, err := deriveHandshakeKey(ecdhShared, saltBytes, []byte(opts.Token))
+		if err != nil {
+			return fmt.Errorf("wire: derive handshake key: %w", err)
+		}
+		clientProof := ComputeClientProof(handshakeKey)
+
+		// ── 4. Send auth with proof (no token on wire) ──
+		auth := Envelope{
+			Type: TypeAuth,
+			TS:   nowRFC3339(),
+			Payload: AuthPayload{
+				NodeName: opts.NodeName,
+				Proof:    EncodeBase64(clientProof),
+			},
+		}
+		if err := c.writeJSON(ctx, opts.HandshakeTimeout, auth); err != nil {
+			return fmt.Errorf("wire: send auth: %w", err)
+		}
+
+		// ── 5. Await auth_ok and verify server proof ──
+		authEnv, err := c.readTyped(ctx, opts.HandshakeTimeout)
+		if err != nil {
+			return fmt.Errorf("wire: read auth_ok: %w", err)
+		}
+		switch authEnv.Type {
+		case TypeAuthOK:
+			var ok AuthOKPayload
+			if err := reMarshalInto(authEnv.Payload, &ok); err != nil {
+				return fmt.Errorf("wire: decode auth_ok: %w", err)
+			}
+			if ok.Proof != "" {
+				serverProof, err := DecodeBase64(ok.Proof)
+				if err != nil {
+					return fmt.Errorf("wire: decode server proof: %w", err)
+				}
+				if err := VerifyServerProof(handshakeKey, serverProof); err != nil {
+					return fmt.Errorf("wire: %w", err)
+				}
+			}
+			if c.sessionID == "" {
+				c.sessionID = ok.SessionID
+			}
+
+			// ── 6. Derive session key for encrypt/decrypt ──
+			c.e2eKey, err = DeriveSessionKey(handshakeKey, c.sessionID)
+			if err != nil {
+				return fmt.Errorf("wire: derive session key: %w", err)
+			}
+			return nil
+		case TypeAuthErr:
+			var ae AuthErrPayload
+			if err := reMarshalInto(authEnv.Payload, &ae); err != nil {
+				return fmt.Errorf("wire: decode auth_err: %w", err)
+			}
+			return fmt.Errorf("%w: reason=%q code=%d", ErrAuthFailed, ae.Reason, ae.Code)
+		default:
+			return fmt.Errorf("%w: got %q, want auth_ok or auth_err",
+				ErrUnexpectedMessage, authEnv.Type)
+		}
 	case TypeHelloErr:
 		var he HelloErrPayload
 		if err := reMarshalInto(ackEnv.Payload, &he); err != nil {
@@ -235,14 +351,15 @@ func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
 		return fmt.Errorf("%w: got %q, want hello_ack or hello_err",
 			ErrUnexpectedMessage, ackEnv.Type)
 	}
+}
 
-	// 3. Send auth.
+// legacyAuth performs the old token-based auth when the server doesn't
+// support E2E (no ecdh_pub in hello_ack).
+func (c *Client) legacyAuth(ctx context.Context, opts DialOptions) error {
 	auth := NewAuthEnvelope(opts.NodeName, opts.Token)
 	if err := c.writeJSON(ctx, opts.HandshakeTimeout, auth); err != nil {
 		return fmt.Errorf("wire: send auth: %w", err)
 	}
-
-	// 4. Await auth_ok or auth_err.
 	authEnv, err := c.readTyped(ctx, opts.HandshakeTimeout)
 	if err != nil {
 		return fmt.Errorf("wire: read auth_ok: %w", err)
@@ -253,11 +370,6 @@ func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
 		if err := reMarshalInto(authEnv.Payload, &ok); err != nil {
 			return fmt.Errorf("wire: decode auth_ok: %w", err)
 		}
-		// The server's auth_ok session_id should match
-		// hello_ack's; if it doesn't, something is off, but
-		// PROTOCOL.md \u00a73.5 doesn't require us to enforce
-		// it. We surface the auth_ok value if hello_ack
-		// didn't have one (defensive).
 		if c.sessionID == "" {
 			c.sessionID = ok.SessionID
 		}
@@ -335,4 +447,64 @@ func normaliseServerURL(serverURL string) string {
 		u.Path = defaultWSPath
 	}
 	return u.String()
+}
+
+// writeE2E sends an envelope. If E2E is active, encrypts and wraps in `enc`.
+func (c *Client) writeE2E(ctx context.Context, env Envelope) error {
+	if c.e2eKey != nil {
+		plain, err := json.Marshal(env.Payload)
+		if err != nil {
+			return fmt.Errorf("wire: marshal payload: %w", err)
+		}
+		ct, err := EncryptE2E(c.e2eKey, plain)
+		if err != nil {
+			return fmt.Errorf("wire: encrypt: %w", err)
+		}
+		env = Envelope{
+			Type: TypeEnc,
+			TS:   nowRFC3339(),
+			Payload: EncPayload{
+				Data: EncodeBase64(ct),
+			},
+		}
+	}
+	if err := c.conn.SetWriteDeadline(deadlineFromCtx(ctx, 10*time.Second)); err != nil {
+		return fmt.Errorf("wire: set write deadline: %w", err)
+	}
+	return c.conn.WriteJSON(env)
+}
+
+// readE2E reads one envelope. If E2E is active, expects an `enc` frame.
+func (c *Client) readE2E(ctx context.Context) (Envelope, error) {
+	if err := c.conn.SetReadDeadline(deadlineFromCtx(ctx, 10*time.Second)); err != nil {
+		return Envelope{}, fmt.Errorf("wire: set read deadline: %w", err)
+	}
+	_, raw, err := c.conn.ReadMessage()
+	if err != nil {
+		return Envelope{}, fmt.Errorf("wire: read: %w", err)
+	}
+	var env Envelope
+	if err := decodeEnvelope(raw, &env); err != nil {
+		return Envelope{}, fmt.Errorf("wire: decode envelope: %w", err)
+	}
+	if c.e2eKey != nil && env.Type == TypeEnc {
+		var ep EncPayload
+		if err := reMarshalInto(env.Payload, &ep); err != nil {
+			return Envelope{}, fmt.Errorf("wire: decode enc payload: %w", err)
+		}
+		ct, err := DecodeBase64(ep.Data)
+		if err != nil {
+			return Envelope{}, fmt.Errorf("wire: decode enc data: %w", err)
+		}
+		plain, err := DecryptE2E(c.e2eKey, ct)
+		if err != nil {
+			return Envelope{}, err
+		}
+		var result Envelope
+		if err := decodeEnvelope(plain, &result); err != nil {
+			return Envelope{}, fmt.Errorf("wire: decode decrypted envelope: %w", err)
+		}
+		return result, nil
+	}
+	return env, nil
 }
