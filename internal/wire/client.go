@@ -136,6 +136,12 @@ type Client struct {
 	// e2eKey is the AES-256-GCM session key derived after the E2E
 	// handshake. When nil, E2E is not active and messages are plaintext.
 	e2eKey []byte
+
+	// readTimeout bounds a single read; defaults to DefaultPongTimeout+30s (90s).
+	readTimeout time.Duration
+
+	// writeTimeout bounds a single write; defaults to 10s.
+	writeTimeout time.Duration
 }
 
 // Conn returns the underlying *websocket.Conn. Reserved for the
@@ -207,7 +213,12 @@ func Connect(ctx context.Context, opts DialOptions) (*Client, error) {
 	}
 	// From here on, any error path must close conn so we don't
 	// leak the socket.
-	c := &Client{conn: conn, nodeName: opts.NodeName}
+	c := &Client{
+		conn:         conn,
+		nodeName:     opts.NodeName,
+		readTimeout:  DefaultPongTimeout + 30*time.Second,
+		writeTimeout: 10 * time.Second,
+	}
 	if err := c.handshake(ctx, opts); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -468,7 +479,7 @@ func (c *Client) writeE2E(ctx context.Context, env Envelope) error {
 			},
 		}
 	}
-	if err := c.conn.SetWriteDeadline(deadlineFromCtx(ctx, 10*time.Second)); err != nil {
+	if err := c.conn.SetWriteDeadline(deadlineFromCtx(ctx, c.writeTimeout)); err != nil {
 		return fmt.Errorf("wire: set write deadline: %w", err)
 	}
 	return c.conn.WriteJSON(env)
@@ -476,7 +487,7 @@ func (c *Client) writeE2E(ctx context.Context, env Envelope) error {
 
 // readE2E reads one envelope. If E2E is active, expects an `enc` frame.
 func (c *Client) readE2E(ctx context.Context) (Envelope, error) {
-	if err := c.conn.SetReadDeadline(deadlineFromCtx(ctx, 10*time.Second)); err != nil {
+	if err := c.conn.SetReadDeadline(deadlineFromCtx(ctx, c.readTimeout)); err != nil {
 		return Envelope{}, fmt.Errorf("wire: set read deadline: %w", err)
 	}
 	_, raw, err := c.conn.ReadMessage()
