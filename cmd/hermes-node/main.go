@@ -842,6 +842,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				Capabilities: []string{"exec", "read", "write"},
 				TLSConfig:    tlsCfg,
 				ProxyURL:     cfg.Node.ProxyURL,
+				DebugLog:     log.Debug,
 			})
 		},
 		// Setup is invoked once per (re)connect. We build a fresh
