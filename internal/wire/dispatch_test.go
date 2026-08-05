@@ -93,7 +93,11 @@ func newConnPair(t *testing.T) *connPair {
 // test's read/write timeouts so the suite runs fast.
 func newTestDispatcher(t *testing.T, conn *websocket.Conn) *Dispatcher {
 	t.Helper()
-	c := &Client{conn: conn}
+	c := &Client{
+		conn:         conn,
+		readTimeout:  2 * time.Second,
+		writeTimeout: 2 * time.Second,
+	}
 	d := NewDispatcher(c)
 	d.ReadTimeout = 2 * time.Second
 	d.WriteTimeout = 2 * time.Second
