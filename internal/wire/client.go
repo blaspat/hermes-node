@@ -463,9 +463,12 @@ func normaliseServerURL(serverURL string) string {
 // writeE2E sends an envelope. If E2E is active, encrypts and wraps in `enc`.
 func (c *Client) writeE2E(ctx context.Context, env Envelope) error {
 	if c.e2eKey != nil {
-		plain, err := json.Marshal(env.Payload)
+		// Encrypt the complete protocol envelope, including its type.
+		// The server needs the decrypted type to route ping/pong and
+		// operational messages; encrypting only Payload loses it.
+		plain, err := json.Marshal(env)
 		if err != nil {
-			return fmt.Errorf("wire: marshal payload: %w", err)
+			return fmt.Errorf("wire: marshal envelope: %w", err)
 		}
 		ct, err := EncryptE2E(c.e2eKey, plain)
 		if err != nil {
