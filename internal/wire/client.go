@@ -106,6 +106,10 @@ type DialOptions struct {
 	// proxy-from-environment behaviour (ProxyFromEnvironment).
 	// Example: "http://proxy.corp.example:8080".
 	ProxyURL string
+
+	// DebugLog receives protocol lifecycle diagnostics. Implementations
+	// must not log tokens, proofs, or key material.
+	DebugLog func(format string, args ...any)
 }
 
 // withDefaults returns a copy of opts with zero-valued fields filled
@@ -181,6 +185,10 @@ func (c *Client) ReadE2E(ctx context.Context) (Envelope, error) {
 // returns successfully, the caller owns the connection's lifecycle.
 func Connect(ctx context.Context, opts DialOptions) (*Client, error) {
 	opts = opts.withDefaults()
+	debugLog := opts.DebugLog
+	if debugLog == nil {
+		debugLog = func(string, ...any) {}
+	}
 
 	// Normalise ServerURL: append /ws/nodes if the user omitted it.
 	// This lets operators pass just "wss://host:port" without the path,
@@ -209,8 +217,10 @@ func Connect(ctx context.Context, opts DialOptions) (*Client, error) {
 	}
 	conn, _, err := dialer.DialContext(wsCtx, opts.ServerURL, nil)
 	if err != nil {
+		debugLog("wire connect dial failed: url=%s err=%v", opts.ServerURL, err)
 		return nil, fmt.Errorf("wire: dial %s: %w", opts.ServerURL, err)
 	}
+	debugLog("wire connect established: node=%s", opts.NodeName)
 	// From here on, any error path must close conn so we don't
 	// leak the socket.
 	c := &Client{
@@ -220,9 +230,11 @@ func Connect(ctx context.Context, opts DialOptions) (*Client, error) {
 		writeTimeout: 10 * time.Second,
 	}
 	if err := c.handshake(ctx, opts); err != nil {
+		debugLog("wire handshake failed: node=%s err=%v", opts.NodeName, err)
 		_ = conn.Close()
 		return nil, err
 	}
+	debugLog("wire handshake complete: node=%s session=%s e2e=%t", opts.NodeName, c.sessionID, c.E2EActive())
 	return c, nil
 }
 
@@ -230,6 +242,10 @@ func Connect(ctx context.Context, opts DialOptions) (*Client, error) {
 // connection. It is split out from Connect so tests can drive the
 // state machine directly with a pre-built *websocket.Conn if needed.
 func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
+	debugLog := opts.DebugLog
+	if debugLog == nil {
+		debugLog = func(string, ...any) {}
+	}
 	// ── 1. Generate E2E keypair and send hello ──
 	e2eKP, err := GenerateE2EKeyPair()
 	if err != nil {
@@ -259,12 +275,15 @@ func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
 	if err := c.writeJSON(ctx, opts.HandshakeTimeout, hello); err != nil {
 		return fmt.Errorf("wire: send hello: %w", err)
 	}
+	debugLog("wire handshake hello sent: node=%s e2e=true", opts.NodeName)
 
 	// ── 2. Await hello_ack (with ECDH pub + salt) ──
 	ackEnv, err := c.readTyped(ctx, opts.HandshakeTimeout)
 	if err != nil {
+		debugLog("wire handshake hello_ack read failed: node=%s err=%v", opts.NodeName, err)
 		return fmt.Errorf("wire: read hello_ack: %w", err)
 	}
+	debugLog("wire handshake response: node=%s type=%s", opts.NodeName, ackEnv.Type)
 	switch ackEnv.Type {
 	case TypeHelloAck:
 		var ack HelloAckPayload
@@ -275,6 +294,7 @@ func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
 
 		// If the server returned ECDH pub, do E2E handshake.
 		if ack.ECDHPub == "" {
+			debugLog("wire handshake using legacy auth: node=%s", opts.NodeName)
 			// Legacy server — fall through to plaintext auth.
 			return c.legacyAuth(ctx, opts)
 		}
@@ -310,12 +330,15 @@ func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
 		if err := c.writeJSON(ctx, opts.HandshakeTimeout, auth); err != nil {
 			return fmt.Errorf("wire: send auth: %w", err)
 		}
+		debugLog("wire handshake auth proof sent: node=%s session=%s", opts.NodeName, c.sessionID)
 
 		// ── 5. Await auth_ok and verify server proof ──
 		authEnv, err := c.readTyped(ctx, opts.HandshakeTimeout)
 		if err != nil {
+			debugLog("wire handshake auth_ok read failed: node=%s session=%s err=%v", opts.NodeName, c.sessionID, err)
 			return fmt.Errorf("wire: read auth_ok: %w", err)
 		}
+		debugLog("wire handshake auth response: node=%s type=%s", opts.NodeName, authEnv.Type)
 		switch authEnv.Type {
 		case TypeAuthOK:
 			var ok AuthOKPayload
