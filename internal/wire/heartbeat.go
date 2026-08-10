@@ -13,7 +13,7 @@ import (
 
 const (
 	DefaultPingInterval = 30 * time.Second
-	DefaultPongTimeout  = 60 * time.Second
+	DefaultPongTimeout  = 90 * time.Second
 )
 
 var ErrHeartbeatDead = errors.New("wire: heartbeat timed out (no message in pong timeout)")
