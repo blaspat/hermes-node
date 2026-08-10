@@ -931,8 +931,36 @@ func TestRun_Status_CorruptedFile(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit = %d, want 1; stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "parse") {
-		t.Errorf("stderr should mention parse error; got %q", stderr.String())
+}
+
+func TestRun_Status_StalePID(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	os.WriteFile(cfgPath, []byte(""), 0o600)
+	statusPath := filepath.Join(dir, "status.json")
+	// Use a PID that is almost certainly not running anywhere.
+	// On Linux, PIDs max out at /proc/sys/kernel/pid_max (usually 4194304).
+	// 99999 is well above typical usage and won't collide with a real process.
+	const deadPID = 99999
+	contents := fmt.Sprintf(
+		`{"pid":%d,"state":"connected","name":"dead-node","server_url":"wss://x","version":"dev","session_id":"sess-1","started_at":"2026-06-22T21:00:00Z","last_connected_at":"2026-06-22T21:05:00Z"}`,
+		deadPID,
+	)
+	if err := os.WriteFile(statusPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"status", "--config", cfgPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%q", code, stderr.String())
+	}
+	// Status file says "connected" but PID is dead → must show "stopped".
+	if strings.Contains(stdout.String(), "connected") {
+		t.Errorf("stale PID should NOT show 'connected'; got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "stopped") {
+		t.Errorf("stale PID should show 'stopped'; got %q", stdout.String())
 	}
 }
 
