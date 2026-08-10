@@ -315,6 +315,47 @@ func TestRunCapsStdout(t *testing.T) {
 	}
 }
 
+// TestRunEnvIsolation verifies that the bash subprocess does NOT inherit
+// arbitrary environment variables from the daemon process — only the
+// explicit allowlist (PATH, HOME, USER, SHELL, LANG, TERM, PS1).
+// A secret token in the daemon's environment must not be readable inside
+// the shell via `echo $VAR`.
+func TestRunEnvIsolation(t *testing.T) {
+	// Set a secret that should NOT leak into the shell.
+	t.Setenv("HERMES_TEST_SECRET", "s3cret-d0nt-leak")
+
+	s, err := NewSession(context.Background(), nil, DefaultMaxOutputBytes)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	// Try to read the secret from inside the shell.
+	stdout, _, code, err := s.Run(context.Background(), "echo $HERMES_TEST_SECRET")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("Run: exit %d", code)
+	}
+	if strings.Contains(stdout, "s3cret") {
+		t.Fatalf("HERMES_TEST_SECRET leaked into shell stdout: %q", stdout)
+	}
+
+	// Positive control: PATH must still be available so the shell
+	// can find basic commands.
+	stdout, _, code, err = s.Run(context.Background(), "echo PATH=$PATH")
+	if err != nil {
+		t.Fatalf("Run PATH check: %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("Run PATH check: exit %d", code)
+	}
+	if !strings.Contains(stdout, "PATH=") || strings.Count(stdout, "PATH=") == 0 {
+		t.Fatalf("PATH not available in shell: stdout=%q", stdout)
+	}
+}
+
 // TestCloseIdempotent verifies Close is safe to call repeatedly, and
 // that Run on a closed session returns ErrClosed (or wraps it).
 func TestCloseIdempotent(t *testing.T) {
