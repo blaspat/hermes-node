@@ -277,6 +277,7 @@ Same protocol on both sides — see [`PROTOCOL.md`](./PROTOCOL.md).
 - **Auto-reconnect** — exponential backoff (configurable via `config.toml`). Survives reboots as a background service.
 - **Full audit log** — every call is recorded in append-only JSONL with automatic rotation at 50 MB (keeps 5 files).
 - **TLS 1.3 required** — public CAs work out of the box; custom CA and cert pinning supported for self-signed deployments.
+- **TCP keepalive** — enabled by default (30s probe interval) to prevent proxies and stateful firewalls from dropping idle CONNECT tunnels. Works transparently for both direct and proxy connections.
 - **Deny-by-default security** — empty `allowed_paths` rejects all paths. The allowlist is enforced on the laptop — the server cannot bypass it.
 - **End-to-end encryption** — X25519 ECDH + AES-256-GCM encrypts all operational messages. The pairing token is never transmitted on the wire after initial pairing. See [End-to-End Encryption](#end-to-end-encryption).
 
@@ -353,6 +354,8 @@ The client sends `e2e: true` in the `hello` message. If the server doesn't suppo
 **Config file not found** — Ensure `~/.hermes-node/config.toml` exists. Run `hermes-node pair` to create it, or pass `--config <path>` to every subcommand.
 
 **Daemon not responding to status** — Run `hermes-node status` to check if the daemon is running. If the status file is stale (PID not running), the `(not running)` indicator will appear.
+
+**Frequent reconnects behind a proxy** — If the audit log shows `heartbeat timed out (idle 1m30s, threshold 1m30s)` when connecting through a proxy, the proxy is likely killing idle CONNECT tunnels. TCP keepalive is enabled by default (30s interval) to prevent this — make sure you're running the latest version. If the issue persists, try reducing `backoff_initial` in `config.toml` for faster recovery between drops.
 
 ## Contributing
 
