@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -215,6 +216,29 @@ func Connect(ctx context.Context, opts DialOptions) (*Client, error) {
 		}
 		dialer.Proxy = http.ProxyURL(proxyURL)
 	}
+
+	// Set TCP keepalive on the underlying connection so corporate
+	// proxies and stateful firewalls don't drop idle tunnels during
+	// quiet periods. gorilla/websocket calls NetDialContext for every
+	// TCP dial (direct or through a proxy), so this covers both paths.
+	// Without this, a 90s WebSocket heartbeat is irrelevant — the TCP
+	// connection gets killed at the proxy layer before the first ping
+	// timeout fires.
+	dialer.NetDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		d := net.Dialer{
+			KeepAlive: 30 * time.Second,
+		}
+		conn, err := d.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		if tcpConn, ok := conn.(*net.TCPConn); ok {
+			_ = tcpConn.SetKeepAlive(true)
+			_ = tcpConn.SetKeepAlivePeriod(30 * time.Second)
+		}
+		return conn, nil
+	}
+
 	conn, _, err := dialer.DialContext(wsCtx, opts.ServerURL, nil)
 	if err != nil {
 		debugLog("wire connect dial failed: url=%s err=%v", opts.ServerURL, err)
