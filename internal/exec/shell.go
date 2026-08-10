@@ -189,7 +189,21 @@ func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int) 
 	}
 
 	cmd := exec.CommandContext(ctx, bashPath, "--noprofile", "--norc", "-i")
-	cmd.Env = append(os.Environ(), "PS1=") // keep the prompt empty
+	// Build the shell environment from an explicit allowlist so the
+	// daemon's own secrets (tokens, keys, sentinel vars) don't leak
+	// into the bash subprocess. PATH, HOME, and SHELL are required
+	// for basic shell operation; LANG and TERM keep tooling happy.
+	// If the operator needs additional vars, they can set them via
+	// per-call env (exec payload, future enhancement).
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"USER=" + os.Getenv("USER"),
+		"SHELL=" + os.Getenv("SHELL"),
+		"LANG=" + os.Getenv("LANG"),
+		"TERM=" + os.Getenv("TERM"),
+		"PS1=",
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("shell: stdin pipe: %w", err)
