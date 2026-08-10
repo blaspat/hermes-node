@@ -21,7 +21,7 @@ func newTestSession(t *testing.T) *Session {
 	t.Helper()
 	t.Setenv("HERMES_CWD", t.TempDir())
 
-	s, err := NewSession(context.Background(), nil)
+	s, err := NewSession(context.Background(), nil, DefaultMaxOutputBytes)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -280,6 +280,38 @@ func TestRunCtxCancelAborts(t *testing.T) {
 	}
 	if elapsed > 5*time.Second {
 		t.Fatalf("Run with cancelled ctx took %v — should have aborted promptly", elapsed)
+	}
+}
+
+// TestRunCapsStdout verifies that the demuxer enforces a per-call
+// stdout byte cap at ingest time — before the full output is buffered.
+// A command that emits more than maxOutputBytes must have its stdout
+// truncated at the cap, not balloon to the full output size.
+func TestRunCapsStdout(t *testing.T) {
+	s, err := NewSession(context.Background(), nil, 200)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	// Emit 400 chars on one line (printf adds no newlines): 200 "x"
+	// then 200 "y". With a 200-byte cap the output must be truncated.
+	stdout, _, code, err := s.Run(context.Background(),
+		"printf '%.0sx' {1..200}; printf '%.0sy' {1..200}")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("Run: exit %d", code)
+	}
+	if len(stdout) != 200 {
+		t.Fatalf("stdout len=%d, want 200 (cap=200, exact truncation)", len(stdout))
+	}
+	if !strings.Contains(stdout, "x") {
+		t.Error("expected 'x' chars in capped output")
+	}
+	if strings.Contains(stdout, "y") {
+		t.Error("unexpected 'y' chars in capped output — should be truncated before the y's")
 	}
 }
 

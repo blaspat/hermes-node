@@ -51,6 +51,12 @@ import (
 // distinguish "session is gone" from genuine command failures.
 var ErrClosed = errors.New("shell: session is closed")
 
+// DefaultMaxOutputBytes is the per-call stdout cap enforced by the
+// demuxer at ingest time. Matches wire.MaxOutputBytes (10 MB) so the
+// two layers of defense agree — the demuxer caps at read time, and
+// handler_exec.go caps again at egress.
+const DefaultMaxOutputBytes = 10 * 1024 * 1024
+
 // maxStderrBytes is the cap on accumulated stderr per session. When
 // exceeded, further stderr is silently dropped to prevent OOM. The
 // 10 MB limit matches the existing output cap in handler_exec.go.
@@ -82,6 +88,9 @@ type runResult struct {
 // Session is a persistent bash subprocess. Construct with
 // NewSession, drive with Run, tear down with Close. A zero-value
 // Session is not usable; always go through NewSession.
+//
+// maxOutputBytes caps per-call stdout at ingest time in the demuxer
+// goroutine (defense in depth — handler_exec.go also caps at egress).
 type Session struct {
 	mu sync.Mutex
 
@@ -132,6 +141,11 @@ type Session struct {
 	// Close() waits on it after killing bash to ensure all stderr
 	// has been drained before returning.
 	stderrDone chan struct{}
+
+	// maxOutputBytes is the per-call stdout cap enforced at ingest
+	// time by the demuxer goroutine. Set via NewSession; defaults to
+	// DefaultMaxOutputBytes.
+	maxOutputBytes int
 }
 
 // NewSession starts a fresh interactive bash and returns a Session
@@ -141,11 +155,15 @@ type Session struct {
 // bash keeps a job-control state machine, which makes it flush
 // stdout promptly.
 //
+// maxOutputBytes caps per-call stdout at ingest time in the
+// demuxer goroutine. Pass DefaultMaxOutputBytes for the 10 MB
+// production cap; tests may pass a smaller value.
+//
 // The session's initial cwd is the first entry in allowedPaths (if
 // non-empty), otherwise the value of the HERMES_CWD env var if set,
 // otherwise the calling process's current working directory. This
 // ensures the shell starts inside allowed territory.
-func NewSession(ctx context.Context, allowedPaths []string) (*Session, error) {
+func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int) (*Session, error) {
 	id, err := randomID(8)
 	if err != nil {
 		return nil, fmt.Errorf("shell: generate session id: %w", err)
@@ -190,14 +208,19 @@ func NewSession(ctx context.Context, allowedPaths []string) (*Session, error) {
 		return nil, fmt.Errorf("shell: start bash: %w", err)
 	}
 
+	if maxOutputBytes <= 0 {
+		maxOutputBytes = DefaultMaxOutputBytes
+	}
+
 	s := &Session{
-		id:         id,
-		cmd:        cmd,
-		stdin:      stdin,
-		closeCh:    make(chan struct{}),
-		cwd:        initialCwd,
-		pending:    make(map[uint64]*pendingCall),
-		stderrDone: make(chan struct{}),
+		id:             id,
+		cmd:            cmd,
+		stdin:          stdin,
+		closeCh:        make(chan struct{}),
+		cwd:            initialCwd,
+		pending:        make(map[uint64]*pendingCall),
+		stderrDone:     make(chan struct{}),
+		maxOutputBytes: maxOutputBytes,
 	}
 
 	go s.captureStderr(stderr)
@@ -569,12 +592,28 @@ func (s *Session) demux(rd io.Reader) {
 		}
 
 		// Normal output line: append to the active call's
-		// buffer. We restore the trailing newline that
-		// Scanner stripped so the caller's output looks
-		// like a normal command produced it.
+		// buffer, capped at maxOutputBytes. We restore the
+		// trailing newline that Scanner stripped so the
+		// caller's output looks like a normal command produced
+		// it. Once the cap is reached, further output is
+		// silently dropped — the handler_exec.go egress cap
+		// provides a second line of defense.
+		//
+		// Truncation: a single line that crosses the cap
+		// boundary is truncated to fit rather than dropped
+		// entirely, so the caller always gets at least
+		// partial output up to the cap.
 		if cur != nil {
+			if buf.Len() >= s.maxOutputBytes {
+				continue // at or past cap — drop silently
+			}
 			buf.WriteString(line)
 			buf.WriteByte('\n')
+			if buf.Len() > s.maxOutputBytes {
+				data := buf.String()
+				buf.Reset()
+				buf.WriteString(data[:s.maxOutputBytes])
+			}
 		}
 		// else: known-unknown call, drop the line.
 	}
