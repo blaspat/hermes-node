@@ -190,7 +190,11 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 // liveness clock can be bumped — PROTOCOL.md §6 says any received
 // message counts as liveness, not just pong.
 func (d *Dispatcher) readOne(ctx context.Context) (Envelope, error) {
-	return d.client.ReadE2E(ctx)
+	env, err := d.client.ReadE2E(ctx)
+	if err == nil && d.OnRead != nil {
+		d.OnRead()
+	}
+	return env, err
 }
 
 // writeOne sends one envelope with the configured write deadline.
