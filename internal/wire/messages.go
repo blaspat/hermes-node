@@ -127,14 +127,15 @@ func NewHelloEnvelope(protocolVersion, nodeName, nodeVersion, platform, arch str
 }
 
 // HelloAckPayload is the body of a `hello_ack` message (PROTOCOL.md
-// \u00a73.2). The client treats it as the only acceptable response to
+// §3.2). The client treats it as the only acceptable response to
 // `hello`; a `hello_err` triggers a different path.
 type HelloAckPayload struct {
-	ProtocolVersion string `json:"protocol_version"`
-	SessionID       string `json:"session_id"`
-	ServerTime      string `json:"server_time"`
-	ECDHPub         string `json:"ecdh_pub,omitempty"`
-	Salt            string `json:"salt,omitempty"`
+	ProtocolVersion string   `json:"protocol_version"`
+	SessionID       string   `json:"session_id"`
+	ServerTime      string   `json:"server_time"`
+	ECDHPub         string   `json:"ecdh_pub,omitempty"`
+	Salt            string   `json:"salt,omitempty"`
+	Capabilities    []string `json:"capabilities,omitempty"`
 }
 
 // HelloErrPayload is the body of a `hello_err` message (PROTOCOL.md
