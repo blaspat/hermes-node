@@ -64,7 +64,7 @@ Every message is a JSON object with the same outer shape:
 - `ts` is informational; the server is the source of truth for timing.
 
 **Reserved `type` strings** (must not be used for application extensions):
-`hello`, `hello_ack`, `hello_err`, `auth`, `auth_ok`, `auth_err`, `exec`, `exec_result`, `read`, `read_result`, `write`, `write_result`, `ping`, `pong`, `error`, `bye`.
+`hello`, `hello_ack`, `hello_err`, `auth`, `auth_ok`, `auth_err`, `exec`, `exec_chunk`, `exec_result`, `read`, `read_result`, `write`, `write_result`, `ping`, `pong`, `error`, `bye`.
 
 ---
 
@@ -97,9 +97,12 @@ Acceptance.
   "type": "hello_ack",
   "protocol_version": "0.1.0",
   "session_id": "uuid-v4",
-  "server_time": "2026-06-04T10:00:00.000Z"
+  "server_time": "2026-06-04T10:00:00.000Z",
+  "capabilities": ["exec", "exec_chunk", "read", "write"]
 }
 ```
+
+- `capabilities` (string array, optional): the server advertises which protocol extensions it supports. When both sides advertise `exec_chunk`, the node may send incremental `exec_chunk` messages (§3.7a) instead of a single `exec_result` (§3.7).
 
 ### 3.3 `hello_err` (server → node)
 Version mismatch or other protocol-level rejection.
@@ -172,6 +175,56 @@ Run a shell command.
 **Output encoding:** stdout/stderr are UTF-8 strings. If a process produces non-UTF-8 bytes, the node replaces invalid sequences with U+FFFD. (We considered base64, but it makes the common case painful and the rare case still requires an explicit decision. v1 keeps it UTF-8.)
 
 **Truncation:** if either stream exceeds 10 MB, the node stops reading at 10 MB, sets `truncated: true`, and reports the partial bytes. Server surfaces a warning to the caller.
+
+### 3.7a `exec_chunk` (node → server) — streaming exec output
+
+When both sides advertise `exec_chunk` in capabilities, the node sends incremental output chunks instead of a single `exec_result`. Chunks are sent as stdout becomes available; the final chunk carries completion metadata.
+
+```json
+{
+  "type": "exec_chunk",
+  "id": "uuid-v4",
+  "seq": 1,
+  "data": "<base64-encoded stdout bytes>",
+  "more": true,
+  "ts": "2026-06-04T10:00:01.000Z"
+}
+```
+
+**Fields:**
+
+- `seq` (int): 1-based monotonic chunk sequence number within a single exec.
+- `data` (string): base64-encoded stdout bytes for this chunk. Empty string on the final chunk when all output was already sent.
+- `more` (bool): `true` when more chunks will follow; `false` on the final chunk.
+- `ts` (RFC3339 string, optional): node's wall clock when the chunk was emitted.
+
+**Final chunk** (`more: false`) additionally carries:
+
+```json
+{
+  "type": "exec_chunk",
+  "id": "uuid-v4",
+  "seq": 4,
+  "data": "",
+  "more": false,
+  "ts": "2026-06-04T10:00:01.234Z",
+  "exit_code": 0,
+  "status": "ok",
+  "duration_ms": 1234,
+  "truncated": false
+}
+```
+
+- `exit_code` (int): process exit code. -1 if the command couldn't launch.
+- `status` (string): `"ok"` / `"error"` / `"timeout"` — same semantics as §3.7.
+- `duration_ms` (int64): wall-clock duration from command start to completion.
+- `truncated` (bool): `true` if output was truncated at the server-side cap.
+
+**Ordering:** chunks are sent in order. The server assembles `data` fields by concatenation (after base64 decoding).
+
+**Fallback:** if either side does not advertise `exec_chunk`, the node sends a single `exec_result` (§3.7) after the command completes (current behaviour).
+
+**Chunk size:** configurable via `chunk_size` in `config.toml` (`[node]` section, default 1 MiB, range 4 KiB–10 MiB).
 
 ### 3.8 `read` (server → node)
 
@@ -352,10 +405,10 @@ A handler that wants to fail cleanly should return an error; panics are reserved
 
 ```jsonc
 // node → server
-{ "type": "hello", "protocol_version": "0.1.0", "node_name": "work-laptop", "node_version": "0.1.0", "platform": "darwin", "arch": "arm64", "capabilities": ["exec", "read", "write"] }
+{ "type": "hello", "protocol_version": "0.1.0", "node_name": "work-laptop", "node_version": "0.1.0", "platform": "darwin", "arch": "arm64", "capabilities": ["exec", "exec_chunk", "read", "write"] }
 
 // server → node
-{ "type": "hello_ack", "protocol_version": "0.1.0", "session_id": "a1b2c3d4-...", "server_time": "2026-06-04T10:00:00.000Z" }
+{ "type": "hello_ack", "protocol_version": "0.1.0", "session_id": "a1b2c3d4-...", "server_time": "2026-06-04T10:00:00.000Z", "capabilities": ["exec", "exec_chunk", "read", "write"] }
 
 // node → server
 { "type": "auth", "node_name": "work-laptop", "token": "abc123..." }
@@ -368,6 +421,11 @@ A handler that wants to fail cleanly should return an error; panics are reserved
 
 // node → server
 { "type": "exec_result", "id": "r-001", "status": "ok", "exit_code": 0, "stdout": "====== test session starts ======\n...\n5 passed in 0.42s", "stderr": "", "duration_ms": 423, "truncated": false }
+
+// Alternative: chunked exec output (both sides advertise exec_chunk)
+// node → server (incremental)
+{ "type": "exec_chunk", "id": "r-002", "seq": 1, "data": "PT09PT09IHRlc3Qgc2Vzc2lv...", "more": true, "ts": "..." }
+{ "type": "exec_chunk", "id": "r-002", "seq": 2, "data": "...", "more": false, "exit_code": 0, "status": "ok", "duration_ms": 423, "truncated": false }
 ```
 
 ### 9.2 Auth failure
@@ -397,8 +455,8 @@ A handler that wants to fail cleanly should return an error; panics are reserved
 
 ## 10. Future directions (not in v1)
 
+- `exec_chunk` streaming (added in v0.2.0 — see §3.7a)
 - `event` messages (node → server, unsolicited notifications)
-- `stream` messages (incremental stdout chunks instead of a single big result)
 - `proxy` messages (server asks node to forward a connection to a third party)
 - Multi-server federation
 - Capability negotiation for camera/screen/browser
