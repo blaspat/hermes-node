@@ -83,7 +83,7 @@ func (n NodeConfig) BackoffFactorValue() float64 {
 func (n NodeConfig) ChunkSizeValue() int {
 	const (
 		defaultChunkSize = 1_048_576  // 1 MiB
-		minChunkSize     = 4096        // 4 KiB
+		minChunkSize     = 4096       // 4 KiB
 		maxChunkSize     = 10_485_760 // 10 MiB
 	)
 	if n.ChunkSize <= 0 {
