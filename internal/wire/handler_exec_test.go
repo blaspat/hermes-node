@@ -974,6 +974,8 @@ func (c *ctxBlockingMock) Run(ctx context.Context, _, _ string) (string, string,
 
 func (c *ctxBlockingMock) Cwd() string { return c.cwd }
 
+func (c *ctxBlockingMock) SetChunkWriter(_ func(ctx context.Context, data []byte, more bool) error, _ int) {}
+
 // failingAuditWriter is an AuditWriter that always errors. Used
 // by the "audit failure does not fail the call" test.
 type failingAuditWriter struct{}
@@ -1001,3 +1003,5 @@ func (s *sleepingMock) Run(ctx context.Context, _, _ string) (string, string, in
 }
 
 func (s *sleepingMock) Cwd() string { return s.cwd }
+
+func (s *sleepingMock) SetChunkWriter(_ func(ctx context.Context, data []byte, more bool) error, _ int) {}
