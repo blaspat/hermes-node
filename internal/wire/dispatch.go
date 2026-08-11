@@ -410,8 +410,17 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, env Envelope) (err error)
 		return nil
 	}
 
+	// Handlers that stream responses (e.g. exec_chunk) manage their
+	// own write lifecycle via WriteEnvelope and return a NoResponse
+	// marker. The dispatch loop must skip the write for these.
+	// Check BEFORE the empty-Type guard — NoResponse envelopes
+	// intentionally have an empty Type.
+	if response.NoResponse {
+		return nil
+	}
+
 	// If the handler returned the zero Envelope, treat that as
-	// "I forgot" \u2014 same conversion as above. Useful
+	// "I forgot" — same conversion as above. Useful
 	// guardrail for future handlers; today the typed
 	// constructors in messages.go always populate Type.
 	if response.Type == "" {
@@ -433,13 +442,6 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, env Envelope) (err error)
 	// can correlate.
 	if response.ID == "" && env.ID != "" {
 		response.ID = env.ID
-	}
-
-	// Handlers that stream responses (e.g. exec_chunk) manage their
-	// own write lifecycle via WriteEnvelope and return a NoResponse
-	// marker. The dispatch loop must skip the write for these.
-	if response.NoResponse {
-		return nil
 	}
 
 	if err := d.writeOne(ctx, response); err != nil {
