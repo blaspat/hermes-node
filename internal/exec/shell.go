@@ -580,11 +580,13 @@ func (s *Session) demux(rd io.Reader) {
 
 	finish := func() {
 		if cur != nil {
-			// Flush any remaining buffered output before closing.
+			// Flush any remaining buffered output as an intermediate
+			// chunk (more=true). The handler always sends the real
+			// final chunk (more=false) with exit_code/status metadata.
 			if cur.chunkWriter != nil && buf.Len() > 0 {
 				chunk := make([]byte, buf.Len())
 				copy(chunk, []byte(buf.String()))
-				_ = cur.chunkWriter(context.Background(), chunk, false)
+				_ = cur.chunkWriter(context.Background(), chunk, true)
 			}
 			if res == nil {
 				res = &runResult{}
