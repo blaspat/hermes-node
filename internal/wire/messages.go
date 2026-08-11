@@ -30,6 +30,7 @@ const (
 	// Server-initiated calls (Task 1.6 dispatch loop).
 	TypeExec        MessageType = "exec"
 	TypeExecResult  MessageType = "exec_result"
+	TypeExecChunk   MessageType = "exec_chunk"
 	TypeRead        MessageType = "read"
 	TypeReadResult  MessageType = "read_result"
 	TypeWrite       MessageType = "write"
@@ -50,6 +51,12 @@ type Envelope struct {
 	ID      string      `json:"id,omitempty"`
 	TS      string      `json:"ts,omitempty"`
 	Payload any         `json:"-"` // marshalled into the envelope via custom MarshalJSON
+
+	// NoResponse, when true, tells the dispatch loop not to write this
+	// envelope back to the server. Used by handlers that stream responses
+	// (e.g. exec_chunk) and manage their own write lifecycle via
+	// the Dispatcher's WriteEnvelope directly.
+	NoResponse bool `json:"-"`
 }
 
 // MarshalJSON flattens the typed payload into the envelope so each
@@ -126,14 +133,15 @@ func NewHelloEnvelope(protocolVersion, nodeName, nodeVersion, platform, arch str
 }
 
 // HelloAckPayload is the body of a `hello_ack` message (PROTOCOL.md
-// \u00a73.2). The client treats it as the only acceptable response to
+// §3.2). The client treats it as the only acceptable response to
 // `hello`; a `hello_err` triggers a different path.
 type HelloAckPayload struct {
-	ProtocolVersion string `json:"protocol_version"`
-	SessionID       string `json:"session_id"`
-	ServerTime      string `json:"server_time"`
-	ECDHPub         string `json:"ecdh_pub,omitempty"`
-	Salt            string `json:"salt,omitempty"`
+	ProtocolVersion string   `json:"protocol_version"`
+	SessionID       string   `json:"session_id"`
+	ServerTime      string   `json:"server_time"`
+	ECDHPub         string   `json:"ecdh_pub,omitempty"`
+	Salt            string   `json:"salt,omitempty"`
+	Capabilities    []string `json:"capabilities,omitempty"`
 }
 
 // HelloErrPayload is the body of a `hello_err` message (PROTOCOL.md
@@ -239,6 +247,32 @@ func NewExecResultEnvelope(requestID string, result ExecResultPayload) Envelope 
 		Type:    TypeExecResult,
 		ID:      requestID,
 		Payload: result,
+	}
+}
+
+// ExecChunkPayload is the body of an `exec_chunk` message
+// (PROTOCOL.md §3.7a). It carries a single chunk of streaming output
+// during a long-running command. Multiple chunks are sent for the same
+// request; the last chunk carries `more: false` and the final
+// status/exit_code/duration_ms fields.
+type ExecChunkPayload struct {
+	Seq        int    `json:"seq"`
+	Data       string `json:"data"`
+	More       bool   `json:"more"`
+	TS         string `json:"ts,omitempty"`
+	ExitCode   int    `json:"exit_code,omitempty"`
+	Status     string `json:"status,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
+}
+
+// NewExecChunkEnvelope builds an `exec_chunk` envelope that echoes
+// the call's request id.
+func NewExecChunkEnvelope(requestID string, payload ExecChunkPayload) Envelope {
+	return Envelope{
+		Type:    TypeExecChunk,
+		ID:      requestID,
+		Payload: payload,
 	}
 }
 

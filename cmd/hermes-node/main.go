@@ -839,7 +839,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				NodeVersion:  version,
 				Platform:     runtime.GOOS,
 				Arch:         runtime.GOARCH,
-				Capabilities: []string{"exec", "read", "write"},
+				Capabilities: []string{"exec", "exec_chunk", "read", "write"},
 				TLSConfig:    tlsCfg,
 				ProxyURL:     cfg.Node.ProxyURL,
 				DebugLog:     log.Debug,
@@ -914,6 +914,9 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				cfg.Node.AllowedPaths,
 				auditLog,
 			)
+			execHandler.WriteFunc = d.WriteEnvelope
+			execHandler.ChunkSize = cfg.Node.ChunkSizeValue()
+			execHandler.SetServerCapabilities(c.ServerCapabilities())
 			fsys := wire.NewFileSystem(cfg.Node.AllowedPaths, auditLog)
 			if err := d.Register(wire.TypeExec, execHandler.Handle); err != nil {
 				return fmt.Errorf("register exec: %w", err)

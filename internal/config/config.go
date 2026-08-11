@@ -39,6 +39,7 @@ type NodeConfig struct {
 	BackoffInitial string   `toml:"backoff_initial"`
 	BackoffMax     string   `toml:"backoff_max"`
 	BackoffFactor  float64  `toml:"backoff_factor"`
+	ChunkSize      int      `toml:"chunk_size"`
 }
 
 // BackoffInitialDuration parses BackoffInitial as a Go duration string
@@ -74,6 +75,27 @@ func (n NodeConfig) BackoffFactorValue() float64 {
 		return 2.0
 	}
 	return n.BackoffFactor
+}
+
+// ChunkSizeValue returns the chunk size for streaming exec_chunk
+// output in bytes. Defaults to 1_048_576 (1 MiB) when unset or zero,
+// clamped to [4096, 10_485_760] (4 KiB – 10 MiB).
+func (n NodeConfig) ChunkSizeValue() int {
+	const (
+		defaultChunkSize = 1_048_576  // 1 MiB
+		minChunkSize     = 4096       // 4 KiB
+		maxChunkSize     = 10_485_760 // 10 MiB
+	)
+	if n.ChunkSize <= 0 {
+		return defaultChunkSize
+	}
+	if n.ChunkSize < minChunkSize {
+		return minChunkSize
+	}
+	if n.ChunkSize > maxChunkSize {
+		return maxChunkSize
+	}
+	return n.ChunkSize
 }
 
 // ServerConfig describes how the node should validate the server's TLS cert.

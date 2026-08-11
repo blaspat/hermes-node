@@ -138,6 +138,11 @@ type Client struct {
 	// connection state machine.
 	sessionID string
 
+	// serverCaps is the capability list the server advertised in
+	// its hello_ack (see PROTOCOL.md §3.2). Used by handlers to
+	// decide which protocol features to enable (e.g. exec_chunk).
+	serverCaps []string
+
 	// e2eKey is the AES-256-GCM session key derived after the E2E
 	// handshake. When nil, E2E is not active and messages are plaintext.
 	e2eKey []byte
@@ -155,6 +160,10 @@ func (c *Client) Conn() *websocket.Conn { return c.conn }
 
 // SessionID returns the server-assigned session identifier.
 func (c *Client) SessionID() string { return c.sessionID }
+
+// ServerCapabilities returns the capability list the server advertised
+// in its hello_ack. May be nil if the server didn't include the field.
+func (c *Client) ServerCapabilities() []string { return c.serverCaps }
 
 // NodeName returns the name this client authenticated as.
 func (c *Client) NodeName() string { return c.nodeName }
@@ -315,6 +324,7 @@ func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
 			return fmt.Errorf("wire: decode hello_ack: %w", err)
 		}
 		c.sessionID = ack.SessionID
+		c.serverCaps = ack.Capabilities
 
 		// If the server returned ECDH pub, do E2E handshake.
 		if ack.ECDHPub == "" {
