@@ -30,6 +30,7 @@ const (
 	// Server-initiated calls (Task 1.6 dispatch loop).
 	TypeExec        MessageType = "exec"
 	TypeExecResult  MessageType = "exec_result"
+	TypeExecChunk   MessageType = "exec_chunk"
 	TypeRead        MessageType = "read"
 	TypeReadResult  MessageType = "read_result"
 	TypeWrite       MessageType = "write"
@@ -239,6 +240,32 @@ func NewExecResultEnvelope(requestID string, result ExecResultPayload) Envelope 
 		Type:    TypeExecResult,
 		ID:      requestID,
 		Payload: result,
+	}
+}
+
+// ExecChunkPayload is the body of an `exec_chunk` message
+// (PROTOCOL.md §3.7a). It carries a single chunk of streaming output
+// during a long-running command. Multiple chunks are sent for the same
+// request; the last chunk carries `more: false` and the final
+// status/exit_code/duration_ms fields.
+type ExecChunkPayload struct {
+	Seq        int    `json:"seq"`
+	Data       string `json:"data"`
+	More       bool   `json:"more"`
+	TS         string `json:"ts,omitempty"`
+	ExitCode   int    `json:"exit_code,omitempty"`
+	Status     string `json:"status,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
+}
+
+// NewExecChunkEnvelope builds an `exec_chunk` envelope that echoes
+// the call's request id.
+func NewExecChunkEnvelope(requestID string, payload ExecChunkPayload) Envelope {
+	return Envelope{
+		Type:    TypeExecChunk,
+		ID:      requestID,
+		Payload: payload,
 	}
 }
 
