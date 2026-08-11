@@ -51,14 +51,6 @@ import (
 // distinguish "session is gone" from genuine command failures.
 var ErrClosed = errors.New("shell: session is closed")
 
-// ChunkWriter is a callback invoked by the demuxer goroutine whenever
-// accumulated output reaches chunkSize bytes. The caller can stream
-// partial output back over the wire without waiting for the command to
-// finish. `more` is true for intermediate chunks and false for the
-// final flush. Implementations must be safe to call from the demuxer
-// goroutine (which is a single goroutine, so no concurrency worries).
-type ChunkWriter func(ctx context.Context, data []byte, more bool) error
-
 // DefaultMaxOutputBytes is the per-call stdout cap enforced by the
 // demuxer at ingest time. Matches wire.MaxOutputBytes (10 MB) so the
 // two layers of defense agree — the demuxer caps at read time, and
@@ -86,7 +78,7 @@ type pendingCall struct {
 	// Session.SetChunkWriter. The demuxer goroutine calls it from its
 	// own goroutine, so the implementation must be safe to call from
 	// that single goroutine (no concurrency needed).
-	chunkWriter ChunkWriter
+	chunkWriter func(ctx context.Context, data []byte, more bool) error
 	chunkSeq    int
 }
 
@@ -166,7 +158,7 @@ type Session struct {
 	// nextChunkWriter is consumed by the next Run call and handed to
 	// the pendingCall. The demuxer goroutine calls it to flush partial
 	// output chunks. After being consumed, it resets to nil.
-	nextChunkWriter ChunkWriter
+	nextChunkWriter func(ctx context.Context, data []byte, more bool) error
 	chunkSize       int
 }
 
@@ -285,7 +277,7 @@ func (s *Session) ID() string { return s.id }
 // via w in chunks of at least chunkSize bytes. The writer is consumed
 // once and then reset to nil. Pass w=nil to disable chunk streaming for
 // subsequent calls. chunkSize is clamped to [4096, maxOutputBytes].
-func (s *Session) SetChunkWriter(w ChunkWriter, chunkSize int) {
+func (s *Session) SetChunkWriter(w func(ctx context.Context, data []byte, more bool) error, chunkSize int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextChunkWriter = w

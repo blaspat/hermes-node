@@ -428,11 +428,18 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, env Envelope) (err error)
 	}
 
 	// Defensive: if the handler forgot to echo the request id,
-	// do it for them. PROTOCOL.md \u00a73.7-3.11 require every
+	// do it for them. PROTOCOL.md §3.7-3.11 require every
 	// result envelope to carry the call's id so the server
 	// can correlate.
 	if response.ID == "" && env.ID != "" {
 		response.ID = env.ID
+	}
+
+	// Handlers that stream responses (e.g. exec_chunk) manage their
+	// own write lifecycle via WriteEnvelope and return a NoResponse
+	// marker. The dispatch loop must skip the write for these.
+	if response.NoResponse {
+		return nil
 	}
 
 	if err := d.writeOne(ctx, response); err != nil {

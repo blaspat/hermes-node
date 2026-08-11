@@ -51,6 +51,12 @@ type Envelope struct {
 	ID      string      `json:"id,omitempty"`
 	TS      string      `json:"ts,omitempty"`
 	Payload any         `json:"-"` // marshalled into the envelope via custom MarshalJSON
+
+	// NoResponse, when true, tells the dispatch loop not to write this
+	// envelope back to the server. Used by handlers that stream responses
+	// (e.g. exec_chunk) and manage their own write lifecycle via
+	// the Dispatcher's WriteEnvelope directly.
+	NoResponse bool `json:"-"`
 }
 
 // MarshalJSON flattens the typed payload into the envelope so each

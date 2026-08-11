@@ -52,6 +52,6 @@ func (a *SessionAdapter) Cwd() string {
 }
 
 // SetChunkWriter forwards to the underlying Session's SetChunkWriter.
-func (a *SessionAdapter) SetChunkWriter(w ChunkWriter, chunkSize int) {
+func (a *SessionAdapter) SetChunkWriter(w func(ctx context.Context, data []byte, more bool) error, chunkSize int) {
 	a.S.SetChunkWriter(w, chunkSize)
 }

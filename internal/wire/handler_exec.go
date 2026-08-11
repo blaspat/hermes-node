@@ -25,6 +25,7 @@ package wire
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -62,10 +63,22 @@ const TruncationMarker = "\n[hermes-node: output truncated at 10MB]\n"
 // Cwd returns the shell's current working directory. Used by the
 // handler to resolve the effective cwd when the exec payload omits
 // it, ensuring the allowlist check still applies.
+//
+// SetChunkWriter configures the next Run to stream partial output
+// via a ChunkWriter. The wire package defines its own ChunkWriter
+// type for the interface contract; the exec package's matching type
+// is wire-compatible.
 type Executer interface {
 	Run(ctx context.Context, target, cmd string) (stdout, stderr string, exit int, err error)
 	Cwd() string
+	SetChunkWriter(w func(ctx context.Context, data []byte, more bool) error, chunkSize int)
 }
+
+// ChunkWriter is called by the exec package's demuxer goroutine to
+// flush partial output chunks during a long-running command. The
+// wire package defines its own copy of this type so the handler can
+// construct callbacks without importing internal/exec.
+type ChunkWriter func(ctx context.Context, data []byte, more bool) error
 
 // AuditWriter is the subset of audit.Writer this handler depends on.
 // A nil value disables audit logging entirely; that's the test rig's
@@ -85,6 +98,21 @@ type ExecHandler struct {
 	Allowed  []string
 	AuditLog AuditWriter
 
+	// WriteFunc is the function to send an envelope on the wire.
+	// When set and chunk streaming is active, the handler sends
+	// exec_chunk envelopes through this instead of returning a
+	// single exec_result. Typically set to Dispatcher.WriteEnvelope.
+	WriteFunc func(ctx context.Context, env Envelope) error
+
+	// ChunkSize is the byte threshold for streaming exec_chunk
+	// messages. Zero means "use the default" (1 MiB). Set from
+	// config.Node.ChunkSizeValue().
+	ChunkSize int
+
+	// serverSupportsChunk is set via SetServerCapabilities when
+	// the server advertises "exec_chunk" in its hello_ack.
+	serverSupportsChunk bool
+
 	// now is the clock used for the audit entry's TS. Tests may
 	// override it to assert timestamps deterministically. Defaults
 	// to time.Now.
@@ -100,6 +128,18 @@ func NewExecHandler(shell Executer, allowed []string, auditLog AuditWriter) *Exe
 		Allowed:  allowed,
 		AuditLog: auditLog,
 		now:      time.Now,
+	}
+}
+
+// SetServerCapabilities checks the server's advertised capabilities for
+// "exec_chunk" and stores the result. Call this after the handshake
+// completes and before any exec calls are dispatched.
+func (h *ExecHandler) SetServerCapabilities(caps []string) {
+	for _, c := range caps {
+		if c == "exec_chunk" {
+			h.serverSupportsChunk = true
+			return
+		}
 	}
 }
 
@@ -240,14 +280,45 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// per-call; the ctx we pass in bounds *this Run call* (and
 	// gives us the timeout path for "client asked for 30s").
 	//
+	// When chunk streaming is enabled (server supports exec_chunk,
+	// ChunkSize is configured, and WriteFunc is available), we set
+	// up a ChunkWriter on the shell so the demuxer flushes partial
+	// output as we go. The final status/exit_code/duration/truncated
+	// is sent as the last chunk with more=false.
+	//
 	// TODO(1.4b): once the shell accepts per-call env, merge
 	// p.Env into the call frame. For 1.4a the session's process
 	// env is fixed at NewSession time; per-call env is silently
 	// ignored. The protocol field is preserved in the decoded
 	// payload so the upgrade is mechanical.
+	useChunks := h.ChunkSize > 0 && h.WriteFunc != nil && h.serverSupportsChunk
+	var chunkSeq int
+
+	if useChunks {
+		rid := requestID // capture for closure
+		h.Shell.SetChunkWriter(func(ctx context.Context, data []byte, more bool) error {
+			chunkSeq++
+			payload := ExecChunkPayload{
+				Seq:  chunkSeq,
+				Data: base64.StdEncoding.EncodeToString(data),
+				More: more,
+			}
+			if err := h.WriteFunc(ctx, NewExecChunkEnvelope(rid, payload)); err != nil {
+				return err
+			}
+			return nil
+		}, h.ChunkSize)
+	}
+
 	start := h.now()
 	stdout, stderr, exit, runErr := h.Shell.Run(callCtx, canonical, p.Command)
 	duration := h.now().Sub(start)
+
+	// Clear the chunk writer so subsequent calls don't accidentally
+	// stream.
+	if useChunks {
+		h.Shell.SetChunkWriter(nil, 0)
+	}
 
 	// Prepend auto-cd warning to stderr if the cwd was outside
 	// the allowlist.
@@ -262,8 +333,7 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// Cap each stream independently. capOutput is total to the
 	// caller; the marker suffix means operators can grep for
 	// "[hermes-node: output truncated" to find the cut-off.
-	stdoutCapped, stdoutTrunc := capOutput(stdout, MaxOutputBytes)
-	stderrCapped, stderrTrunc := capOutput(stderr, MaxOutputBytes)
+	// capped values are computed below.
 
 	status := "ok"
 	if runErr != nil {
@@ -280,19 +350,10 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 		status = "error"
 	}
 
-	result := ExecResultPayload{
-		Status:     status,
-		ExitCode:   exit,
-		Stdout:     stdoutCapped,
-		Stderr:     stderrCapped,
-		DurationMS: duration.Milliseconds(),
-		Truncated:  stdoutTrunc || stderrTrunc,
-	}
+	stdoutCapped, stdoutTrunc := capOutput(stdout, MaxOutputBytes)
+	stderrCapped, stderrTrunc := capOutput(stderr, MaxOutputBytes)
 
-	// Audit. Failure to write the audit row is logged via OnError
-	// upstream but does not fail the call — the user's command
-	// already ran, the operator can re-derive the row from the
-	// exec_result.
+	// Audit.
 	target := p.Command
 	if canonical != "" {
 		target = canonical + " :: " + p.Command
@@ -306,6 +367,32 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 		Status:     status,
 	}
 	h.auditExec(p, entry)
+
+	// If streaming via chunks, send the final chunk with the
+	// result metadata and return NoResponse — the dispatch
+	// loop must skip writing anything for this call.
+	if useChunks {
+		final := ExecChunkPayload{
+			Seq:        chunkSeq + 1,
+			Data:       base64.StdEncoding.EncodeToString([]byte("")),
+			More:       false,
+			ExitCode:   exit,
+			Status:     status,
+			DurationMS: duration.Milliseconds(),
+			Truncated:  stdoutTrunc || stderrTrunc,
+		}
+		_ = h.WriteFunc(context.Background(), NewExecChunkEnvelope(requestID, final))
+		return Envelope{NoResponse: true}, nil
+	}
+
+	result := ExecResultPayload{
+		Status:     status,
+		ExitCode:   exit,
+		Stdout:     stdoutCapped,
+		Stderr:     stderrCapped,
+		DurationMS: duration.Milliseconds(),
+		Truncated:  stdoutTrunc || stderrTrunc,
+	}
 
 	return NewExecResultEnvelope(requestID, result), nil
 }
@@ -378,3 +465,7 @@ func (m *mockExecuter) Run(_ context.Context, target, cmd string) (string, strin
 }
 
 func (m *mockExecuter) Cwd() string { return m.cwd }
+
+func (m *mockExecuter) SetChunkWriter(w func(ctx context.Context, data []byte, more bool) error, chunkSize int) {
+	// no-op for mock: chunks are not tested at this level
+}
