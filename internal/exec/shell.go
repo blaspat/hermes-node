@@ -51,6 +51,14 @@ import (
 // distinguish "session is gone" from genuine command failures.
 var ErrClosed = errors.New("shell: session is closed")
 
+// ChunkWriter is a callback invoked by the demuxer goroutine whenever
+// accumulated output reaches chunkSize bytes. The caller can stream
+// partial output back over the wire without waiting for the command to
+// finish. `more` is true for intermediate chunks and false for the
+// final flush. Implementations must be safe to call from the demuxer
+// goroutine (which is a single goroutine, so no concurrency worries).
+type ChunkWriter func(ctx context.Context, data []byte, more bool) error
+
 // DefaultMaxOutputBytes is the per-call stdout cap enforced by the
 // demuxer at ingest time. Matches wire.MaxOutputBytes (10 MB) so the
 // two layers of defense agree — the demuxer caps at read time, and
@@ -72,6 +80,14 @@ type pendingCall struct {
 	done    chan struct{}
 	result  *runResult
 	aborted bool
+
+	// chunkWriter is an optional callback for streaming partial output
+	// chunks during long-running commands. Set per-call via
+	// Session.SetChunkWriter. The demuxer goroutine calls it from its
+	// own goroutine, so the implementation must be safe to call from
+	// that single goroutine (no concurrency needed).
+	chunkWriter ChunkWriter
+	chunkSeq    int
 }
 
 // runResult is what the reader hands back to Run once it has seen
@@ -146,6 +162,12 @@ type Session struct {
 	// time by the demuxer goroutine. Set via NewSession; defaults to
 	// DefaultMaxOutputBytes.
 	maxOutputBytes int
+
+	// nextChunkWriter is consumed by the next Run call and handed to
+	// the pendingCall. The demuxer goroutine calls it to flush partial
+	// output chunks. After being consumed, it resets to nil.
+	nextChunkWriter ChunkWriter
+	chunkSize       int
 }
 
 // NewSession starts a fresh interactive bash and returns a Session
@@ -259,6 +281,23 @@ func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int) 
 // the value is stable for the lifetime of the Session.
 func (s *Session) ID() string { return s.id }
 
+// SetChunkWriter configures the next Run call to stream partial output
+// via w in chunks of at least chunkSize bytes. The writer is consumed
+// once and then reset to nil. Pass w=nil to disable chunk streaming for
+// subsequent calls. chunkSize is clamped to [4096, maxOutputBytes].
+func (s *Session) SetChunkWriter(w ChunkWriter, chunkSize int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextChunkWriter = w
+	if chunkSize < 4096 {
+		chunkSize = 4096
+	}
+	if chunkSize > s.maxOutputBytes {
+		chunkSize = s.maxOutputBytes
+	}
+	s.chunkSize = chunkSize
+}
+
 // Close terminates the underlying bash subprocess. Safe to call
 // multiple times; subsequent calls are a no-op. After Close, all
 // Run / GetCwd calls return ErrClosed.
@@ -345,14 +384,21 @@ func (s *Session) Run(ctx context.Context, cmd string) (string, string, int, err
 	s.seq++
 	seq := s.seq
 
+	// Consume the per-call chunk writer (if any) so the demuxer can
+	// flush partial output during this command.
+	cw := s.nextChunkWriter
+	s.nextChunkWriter = nil
+	_ = s.chunkSize // used by the demuxer goroutine; no local copy needed
+
 	frame := s.buildFrame(seq, cmd)
 
 	// Register the pending call *before* writing to stdin, so
 	// the demuxer (which can run concurrently) can never see a
 	// BEGIN marker for a seq it has no record of.
 	pc := &pendingCall{
-		seq:  seq,
-		done: make(chan struct{}),
+		seq:         seq,
+		done:        make(chan struct{}),
+		chunkWriter: cw,
 	}
 	s.pendingMu.Lock()
 	s.pending[seq] = pc
@@ -542,6 +588,12 @@ func (s *Session) demux(rd io.Reader) {
 
 	finish := func() {
 		if cur != nil {
+			// Flush any remaining buffered output before closing.
+			if cur.chunkWriter != nil && buf.Len() > 0 {
+				chunk := make([]byte, buf.Len())
+				copy(chunk, []byte(buf.String()))
+				_ = cur.chunkWriter(context.Background(), chunk, false)
+			}
 			if res == nil {
 				res = &runResult{}
 			}
@@ -627,6 +679,20 @@ func (s *Session) demux(rd io.Reader) {
 				data := buf.String()
 				buf.Reset()
 				buf.WriteString(data[:s.maxOutputBytes])
+			}
+			// Flush a chunk if we have a writer and the buffer
+			// has reached the chunk size threshold.
+			if cur.chunkWriter != nil && buf.Len() >= s.chunkSize {
+				chunk := make([]byte, buf.Len())
+				copy(chunk, []byte(buf.String()))
+				cur.chunkSeq++
+				buf.Reset()
+				if err := cur.chunkWriter(context.Background(), chunk, true); err != nil {
+					// Chunk write failed — disable further
+					// chunking but keep collecting output
+					// for the final result.
+					cur.chunkWriter = nil
+				}
 			}
 		}
 		// else: known-unknown call, drop the line.
