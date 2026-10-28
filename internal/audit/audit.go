@@ -35,6 +35,9 @@ type Entry struct {
 	DurationMs int64     `json:"duration_ms"`
 	ExitCode   int       `json:"exit_code"`
 	Status     string    `json:"status"`
+	// Error carries a structured reason for a non-ok status, e.g.
+	// "path_not_allowed". Omitted when empty.
+	Error string `json:"error,omitempty"`
 }
 
 // Writer is a goroutine-safe append-only JSONL audit logger with size-based

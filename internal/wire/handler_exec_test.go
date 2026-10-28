@@ -297,10 +297,10 @@ func TestExecHandler_CwdAllowlistAccepted(t *testing.T) {
 	}
 }
 
-// TestExecHandler_CwdAllowlistAutoCd verifies that an exec with
-// an explicit cwd outside the allowlist is auto-cd'd to the first
-// allowed path and the command still runs (with a warning in stderr).
-func TestExecHandler_CwdAllowlistAutoCd(t *testing.T) {
+// TestExecHandler_CwdOutsideAllowlistDenied verifies that an exec with
+// an explicit cwd outside the allowlist is refused before the shell
+// runs, instead of being silently relocated into an allowed directory.
+func TestExecHandler_CwdOutsideAllowlistDenied(t *testing.T) {
 	allowedDir := t.TempDir()
 	rejectedDir := t.TempDir() // outside allowedDir
 	pair := newConnPair(t)
@@ -325,20 +325,29 @@ func TestExecHandler_CwdAllowlistAutoCd(t *testing.T) {
 	if resp["type"] != "exec_result" {
 		t.Fatalf("response type: got %q, want exec_result", resp["type"])
 	}
-	if resp["status"] != "ok" {
-		t.Errorf("response status: got %q, want ok (auto-cd to allowed dir)", resp["status"])
+	if resp["status"] != "error" {
+		t.Errorf("response status: got %q, want error (cwd outside allowlist)", resp["status"])
 	}
-	if code, _ := resp["exit_code"].(float64); int(code) != 0 {
-		t.Errorf("response exit_code: got %v, want 0", resp["exit_code"])
+	if code, _ := resp["exit_code"].(float64); int(code) != -1 {
+		t.Errorf("response exit_code: got %v, want -1", resp["exit_code"])
 	}
-	// Shell must have been called (auto-cd wraps the command).
-	if got := shell.calls.Load(); got != 1 {
-		t.Errorf("shell invocations: got %d, want 1", got)
+	if stderr, _ := resp["stderr"].(string); !contains(stderr, "path_not_allowed") {
+		t.Errorf("stderr: got %q, want path_not_allowed", stderr)
 	}
-	// Command was modified — should contain "cd allowedDir" prefix.
-	cmd, _ := shell.cmd.Load().(string)
-	if !contains(cmd, "cd ") || !contains(cmd, allowedDir) {
-		t.Errorf("shell cmd: got %q, want cd to %q", cmd, allowedDir)
+	// The command must not run at all: relocating it would produce
+	// output that looks like success while answering a different
+	// question, which is worse than a refusal.
+	if got := shell.calls.Load(); got != 0 {
+		t.Errorf("shell invocations: got %d, want 0 (denied before launch)", got)
+	}
+	// The denial must be auditable, not just reported to the caller.
+	entries := rec.snapshot()
+	if len(entries) != 1 {
+		t.Fatalf("audit entries: got %d, want 1", len(entries))
+	}
+	if entries[0].Status != "denied" || entries[0].Error != "path_not_allowed" {
+		t.Errorf("audit entry: got status=%q error=%q, want denied/path_not_allowed",
+			entries[0].Status, entries[0].Error)
 	}
 }
 
@@ -373,10 +382,9 @@ func TestExecHandler_CwdAllowlistEmpty_RejectsAll(t *testing.T) {
 	}
 }
 
-// TestExecHandler_RejectsImplicitCwdOutsideAllowlist verifies that
-// an exec with no cwd field where the shell's cwd is outside the
-// allowlist auto-cds to the first allowed path and runs the command
-// with a warning (instead of rejecting).
+// TestExecHandler_RejectsImplicitCwdOutsideAllowlist verifies that an
+// exec with no cwd field whose shell sits outside the allowlist is
+// refused rather than auto-cd'd into allowed territory.
 func TestExecHandler_RejectsImplicitCwdOutsideAllowlist(t *testing.T) {
 	pair := newConnPair(t)
 	d := newTestDispatcher(t, pair.client)
@@ -400,21 +408,14 @@ func TestExecHandler_RejectsImplicitCwdOutsideAllowlist(t *testing.T) {
 	if resp["type"] != "exec_result" {
 		t.Fatalf("response type: got %q, want exec_result", resp["type"])
 	}
-	// Auto-cd means the command runs successfully.
-	if resp["status"] != "ok" {
-		t.Errorf("response status: got %q, want ok (auto-cd from %q to first allowed path)", resp["status"], "/etc")
+	if resp["status"] != "error" {
+		t.Errorf("response status: got %q, want error (shell cwd outside allowlist)", resp["status"])
 	}
-	if code, _ := resp["exit_code"].(float64); int(code) != 0 {
-		t.Errorf("response exit_code: got %v, want 0", resp["exit_code"])
+	if stderr, _ := resp["stderr"].(string); !contains(stderr, "path_not_allowed") {
+		t.Errorf("stderr: got %q, want path_not_allowed", stderr)
 	}
-	// Shell was called (once, with the cd-wrapped command).
-	if got := shell.calls.Load(); got != 1 {
-		t.Errorf("shell invocations: got %d, want 1", got)
-	}
-	// Command was wrapped with a cd to /home/user.
-	cmd, _ := shell.cmd.Load().(string)
-	if !contains(cmd, "cd ") || !contains(cmd, "/home/user") {
-		t.Errorf("shell cmd: got %q, want cd to /home/user", cmd)
+	if got := shell.calls.Load(); got != 0 {
+		t.Errorf("shell invocations: got %d, want 0 (denied before launch)", got)
 	}
 }
 
@@ -772,8 +773,7 @@ func TestExecHandler_FsCheckIntegration(t *testing.T) {
 	shell := newMockExecuter("", "", 0, nil)
 	h := newTestExecHandler(t, shell, []string{dir}, nil)
 
-	// Cwd outside the allowed root: handler auto-cds to dir and
-	// the result must be status=ok (the command runs after cd).
+	// Cwd outside the allowed root: denied before the shell runs.
 	env, err := h.Handle(context.Background(), "req-int-bad", map[string]any{
 		"command": "ls",
 		"cwd":     "/etc/secret",
@@ -785,11 +785,14 @@ func TestExecHandler_FsCheckIntegration(t *testing.T) {
 	if err := reMarshalInto(env.Payload, &r); err != nil {
 		t.Fatalf("decode result: %v", err)
 	}
-	if r.Status != "ok" {
-		t.Errorf("status: got %q, want ok (auto-cd to %q)", r.Status, dir)
+	if r.Status != "error" {
+		t.Errorf("status: got %q, want error (cwd outside allowlist)", r.Status)
 	}
-	if !contains(r.Stderr, "outside allowed_paths") {
-		t.Errorf("stderr: got %q, want warning about auto-cd", r.Stderr)
+	if !contains(r.Stderr, "path_not_allowed") {
+		t.Errorf("stderr: got %q, want path_not_allowed", r.Stderr)
+	}
+	if got := shell.calls.Load(); got != 0 {
+		t.Errorf("shell invocations: got %d, want 0 (denied before launch)", got)
 	}
 
 	// fs.Check must agree: /etc/secret is NOT under dir.
