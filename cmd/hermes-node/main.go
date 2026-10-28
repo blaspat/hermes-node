@@ -936,7 +936,11 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				_ = old.Close()
 			}
 
-			session, err := execer.NewSession(ctx, cfg.Node.AllowedPaths, execer.DefaultMaxOutputBytes)
+			var sandboxRoots []string
+			if cfg.Node.SandboxExecEnabled() {
+				sandboxRoots = execer.SandboxRoots(cfg.Node.AllowedPaths, cfg.Node.SandboxWritePaths)
+			}
+			session, err := execer.NewSession(ctx, cfg.Node.AllowedPaths, execer.DefaultMaxOutputBytes, sandboxRoots)
 			if err != nil {
 				return fmt.Errorf("start shell: %w", err)
 			}

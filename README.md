@@ -231,6 +231,14 @@ token = "abc123..."
 # existing directory.
 allowed_paths = ["/home/user", "/tmp"]
 
+# macOS only: run the exec shell under sandbox-exec so writes outside
+# allowed_paths fail. Default true. Set false to disable.
+# sandbox_exec = true
+
+# macOS only: extra directories the sandboxed shell may write to, on top
+# of allowed_paths and the build-cache defaults (~/.m2, ~/.npm, ~/go, ...).
+# sandbox_write_paths = ["/Users/you/.sdkman"]
+
 # Audit log location (default: ~/.hermes-node/audit.log)
 log_path = "/home/user/.hermes-node/audit.log"
 
@@ -346,6 +354,7 @@ The client sends `e2e: true` in the `hello` message. If the server doesn't suppo
 
 - **Token** is stored in plaintext in `config.toml` (mode 0600). It is never transmitted on the wire after initial pairing — the E2E handshake uses HMAC proofs instead. Revoke it on the server with `hermes node revoke --name <name>` — revocation is immediate.
 - **Path allowlist** is enforced on the laptop. Each path is symlink-resolved before the check, so symlinks escaping the allowlist are rejected.
+- **Exec is sandboxed (macOS)** — the `exec` shell runs under `sandbox-exec`, so writes outside `allowed_paths` (plus the build-cache defaults and `/tmp`) fail with EPERM. Disable with `sandbox_exec = false`. Other platforms run the shell unsandboxed.
 - **TLS 1.3** required for all connections. Custom CA and cert pinning are supported.
 - **Audit log** every call with action, target, duration, exit code, and status.
 

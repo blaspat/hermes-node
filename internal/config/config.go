@@ -29,17 +29,31 @@ type Config struct {
 // to callers that pass a file with looser permissions, so a chmod slip
 // during a manual edit can't accidentally widen the token's visibility.
 type NodeConfig struct {
-	ServerURL      string   `toml:"server_url"`
-	Name           string   `toml:"name"`
-	Token          string   `toml:"token"`
-	AllowedPaths   []string `toml:"allowed_paths"`
-	LogPath        string   `toml:"log_path"`
-	LogLevel       string   `toml:"log_level"`
-	ProxyURL       string   `toml:"proxy_url"`
-	BackoffInitial string   `toml:"backoff_initial"`
-	BackoffMax     string   `toml:"backoff_max"`
-	BackoffFactor  float64  `toml:"backoff_factor"`
-	ChunkSize      int      `toml:"chunk_size"`
+	ServerURL    string   `toml:"server_url"`
+	Name         string   `toml:"name"`
+	Token        string   `toml:"token"`
+	AllowedPaths []string `toml:"allowed_paths"`
+	// SandboxExec gates the macOS seatbelt wrapper around the exec shell.
+	// Absent means enabled (secure default); set false to run the shell
+	// unsandboxed — the escape hatch if the profile breaks a toolchain.
+	SandboxExec *bool `toml:"sandbox_exec"`
+	// SandboxWritePaths are extra directories the sandboxed shell may
+	// write to, on top of allowed_paths and the built-in build-cache
+	// defaults. Only used when sandbox_exec is on.
+	SandboxWritePaths []string `toml:"sandbox_write_paths"`
+	LogPath           string   `toml:"log_path"`
+	LogLevel          string   `toml:"log_level"`
+	ProxyURL          string   `toml:"proxy_url"`
+	BackoffInitial    string   `toml:"backoff_initial"`
+	BackoffMax        string   `toml:"backoff_max"`
+	BackoffFactor     float64  `toml:"backoff_factor"`
+	ChunkSize         int      `toml:"chunk_size"`
+}
+
+// SandboxExecEnabled reports whether the exec shell should run under the
+// seatbelt sandbox. An unset field means enabled — the safe default.
+func (n NodeConfig) SandboxExecEnabled() bool {
+	return n.SandboxExec == nil || *n.SandboxExec
 }
 
 // BackoffInitialDuration parses BackoffInitial as a Go duration string
