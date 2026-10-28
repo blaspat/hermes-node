@@ -41,13 +41,17 @@ type NodeConfig struct {
 	// write to, on top of allowed_paths and the built-in build-cache
 	// defaults. Only used when sandbox_exec is on.
 	SandboxWritePaths []string `toml:"sandbox_write_paths"`
-	LogPath           string   `toml:"log_path"`
-	LogLevel          string   `toml:"log_level"`
-	ProxyURL          string   `toml:"proxy_url"`
-	BackoffInitial    string   `toml:"backoff_initial"`
-	BackoffMax        string   `toml:"backoff_max"`
-	BackoffFactor     float64  `toml:"backoff_factor"`
-	ChunkSize         int      `toml:"chunk_size"`
+	// SandboxReadPaths are extra directories the sandboxed shell may read,
+	// on top of the roots it can already write and the toolchain dotfiles
+	// under $HOME. Reads elsewhere under $HOME are denied.
+	SandboxReadPaths []string `toml:"sandbox_read_paths"`
+	LogPath          string   `toml:"log_path"`
+	LogLevel         string   `toml:"log_level"`
+	ProxyURL         string   `toml:"proxy_url"`
+	BackoffInitial   string   `toml:"backoff_initial"`
+	BackoffMax       string   `toml:"backoff_max"`
+	BackoffFactor    float64  `toml:"backoff_factor"`
+	ChunkSize        int      `toml:"chunk_size"`
 }
 
 // SandboxExecEnabled reports whether the exec shell should run under the

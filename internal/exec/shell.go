@@ -178,11 +178,11 @@ type Session struct {
 // otherwise the calling process's current working directory. This
 // ensures the shell starts inside allowed territory.
 //
-// sandboxRoots, when non-empty, is the set of directories the shell may
-// write to (see SandboxRoots). On macOS the whole session runs under
-// sandbox-exec, so writes outside those roots fail with EPERM even though
-// exec is otherwise an unrestricted shell. Empty means unsandboxed.
-func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int, sandboxRoots []string) (*Session, error) {
+// sandbox, when non-nil, restricts what the shell may touch (see
+// SandboxFor). On macOS the whole session runs under sandbox-exec, so
+// reads and writes outside the sandbox's roots fail with EPERM even though
+// exec is otherwise an unrestricted shell. nil means unsandboxed.
+func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int, sandbox *Sandbox) (*Session, error) {
 	id, err := randomID(8)
 	if err != nil {
 		return nil, fmt.Errorf("shell: generate session id: %w", err)
@@ -207,7 +207,7 @@ func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int, 
 		}
 	}
 
-	cmd, _ := shellCommand(ctx, bashPath, sandboxRoots)
+	cmd, _ := shellCommand(ctx, bashPath, sandbox)
 	// Build the shell environment from an explicit allowlist so the
 	// daemon's own secrets (tokens, keys, sentinel vars) don't leak
 	// into the bash subprocess. PATH, HOME, and SHELL are required

@@ -6,6 +6,18 @@ import (
 	"strings"
 )
 
+// Sandbox is the set of paths a sandboxed shell may touch.
+//
+// Write roots get read+write; read roots get read only. HomeDir, when set,
+// is denied outright for both and only re-opened through the roots above —
+// that is what stops a command from reading ~/.ssh or ~/Downloads just
+// because the process happens to run as the user.
+type Sandbox struct {
+	HomeDir string
+	Read    []string
+	Write   []string
+}
+
 // sandboxWriteDefaults are the directories toolchains must write to for a
 // sandboxed shell to stay usable: temp space and build caches. None of them
 // hold source, so allowing writes there does not weaken the allowlist for
@@ -23,6 +35,21 @@ func sandboxWriteDefaults() []string {
 	return roots
 }
 
+// sandboxReadDefaults are the dotfiles under $HOME that git, maven, npm and
+// go read on every run. Denying these would make the sandbox useless for
+// real work, and none of them are project source.
+func sandboxReadDefaults() []string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	out := make([]string, 0, 8)
+	for _, d := range []string{".gitconfig", ".git-credentials", ".ssh", ".netrc", ".npmrc", ".yarnrc", ".config", ".local"} {
+		out = append(out, filepath.Join(home, d))
+	}
+	return out
+}
+
 // sandboxDeviceFiles are the character devices a shell writes to routinely.
 // A bare `(deny file-write*)` blocks these too, which breaks `2>/dev/null`
 // everywhere.
@@ -34,17 +61,25 @@ var sandboxDeviceFiles = []string{
 	"/dev/dtracehelper",
 }
 
-// SandboxProfile renders a seatbelt (sandbox-exec) profile that allows
-// everything except file writes outside roots.
+// sandboxDenyReadRoots are the locations that hold user data. Reads there
+// are denied unless the path is explicitly allowed. System trees (/usr,
+// /System, /Library, /bin, ...) stay readable on purpose: denying them
+// breaks dyld and every toolchain while protecting nothing the user cares
+// about.
+var sandboxDenyReadRoots = []string{"/Volumes"}
+
+// SandboxProfile renders a seatbelt (sandbox-exec) profile.
 //
-// Reads stay unrestricted on purpose: locking them down breaks every
-// toolchain (dyld, /etc, /usr, the compiler's own headers) and buys little
-// against a caller who can already read the allowlisted tree — while writes
-// are what actually damages the machine.
-func SandboxProfile(roots []string) string {
+// Writes are denied everywhere except the write roots. Reads are denied
+// under HomeDir and the user-data roots, then re-opened for the read roots.
+// Rules are evaluated last-match-wins per operation, so the allow lists must
+// come after the denies.
+func SandboxProfile(sb Sandbox) string {
 	var b strings.Builder
-	b.WriteString("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*\n")
-	for _, r := range roots {
+	b.WriteString("(version 1)\n(allow default)\n")
+
+	b.WriteString("(deny file-write*)\n(allow file-write*\n")
+	for _, r := range sb.Write {
 		if r == "" {
 			continue
 		}
@@ -54,6 +89,28 @@ func SandboxProfile(roots []string) string {
 		b.WriteString("  (literal \"" + escapeSeatbelt(d) + "\")\n")
 	}
 	b.WriteString("  (subpath \"/dev/fd\")\n)\n")
+
+	denyRead := append([]string{}, sandboxDenyReadRoots...)
+	if sb.HomeDir != "" {
+		denyRead = append([]string{sb.HomeDir}, denyRead...)
+	}
+	b.WriteString("(deny file-read*")
+	for _, r := range denyRead {
+		b.WriteString("\n  (subpath \"" + escapeSeatbelt(r) + "\")")
+	}
+	b.WriteString(")\n")
+
+	readRoots := append(append([]string{}, sb.Read...), sb.Write...)
+	if len(readRoots) > 0 {
+		b.WriteString("(allow file-read*\n")
+		for _, r := range readRoots {
+			if r == "" {
+				continue
+			}
+			b.WriteString("  (subpath \"" + escapeSeatbelt(r) + "\")\n")
+		}
+		b.WriteString(")\n")
+	}
 	return b.String()
 }
 
