@@ -74,3 +74,36 @@ func TestNewSession_SandboxBlocksOutsideAccess(t *testing.T) {
 		t.Logf("note: no EPERM message in output; out=%q", out)
 	}
 }
+
+// TestNewSession_ReportsUnsandboxedWhenLauncherMissing covers the case the
+// warning in runRun exists for: sandbox_exec is on, a sandbox was built, but
+// the seatbelt launcher is absent — so the shell runs unrestricted and the
+// session must say so rather than claim to be sandboxed.
+func TestNewSession_ReportsUnsandboxedWhenLauncherMissing(t *testing.T) {
+	dir := t.TempDir()
+
+	orig := sandboxExecPath
+	sandboxExecPath = filepath.Join(dir, "no-such-sandbox-exec")
+	defer func() { sandboxExecPath = orig }()
+
+	sb := SandboxFor([]string{dir}, nil, nil)
+	if sb == nil {
+		t.Fatal("SandboxFor returned nil with allowed paths set")
+	}
+
+	s, err := NewSession(context.Background(), []string{dir}, DefaultMaxOutputBytes, sb)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer s.Close()
+
+	if s.Sandboxed() {
+		t.Error("launcher missing: got Sandboxed()=true, want false (this is the fail-open case)")
+	}
+
+	// And the shell must still be usable — degraded, not dead.
+	stdout, _, code, err := s.Run(context.Background(), "echo alive")
+	if err != nil || code != 0 || !strings.Contains(stdout, "alive") {
+		t.Errorf("unsandboxed fallback shell unusable: err=%v code=%d out=%q", err, code, stdout)
+	}
+}

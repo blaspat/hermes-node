@@ -10,7 +10,8 @@ import (
 
 // sandboxExecPath is the macOS seatbelt launcher. It ships with every macOS
 // install (deprecated by Apple but functional) and needs no entitlement.
-const sandboxExecPath = "/usr/bin/sandbox-exec"
+// A var, not a const, so tests can simulate a machine without it.
+var sandboxExecPath = "/usr/bin/sandbox-exec"
 
 // SandboxFor builds the sandbox for this machine: allowed paths plus the
 // toolchain defaults, with $HOME denied except for what is listed. A nil
