@@ -35,16 +35,33 @@ func sandboxWriteDefaults() []string {
 	return roots
 }
 
-// sandboxReadDefaults are the dotfiles under $HOME that git, maven, npm and
-// go read on every run. Denying these would make the sandbox useless for
-// real work, and none of them are project source.
+// sandboxReadDefaults are the paths under $HOME that git, maven, npm, go and
+// the language toolchains themselves read on every run. Denying these would
+// make the sandbox useless for real work, and none of them are project
+// source or user data.
+//
+// The toolchain entries are not optional niceties: on a typical macOS dev
+// box the JDK lives in ~/Library/Java, Homebrew in ~/homebrew (or
+// ~/opt/homebrew), and node/python/ruby runtimes under ~/.nvm, ~/.pyenv,
+// ~/.rbenv. Denying them does not harden anything — they are binaries — it
+// just makes `java`, `go` and `node` fail to launch.
 func sandboxReadDefaults() []string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return nil
 	}
-	out := make([]string, 0, 8)
-	for _, d := range []string{".gitconfig", ".git-credentials", ".ssh", ".netrc", ".npmrc", ".yarnrc", ".config", ".local"} {
+	dirs := []string{
+		// Config the VCS and build tools read on every invocation.
+		".gitconfig", ".git-credentials", ".ssh", ".netrc", ".npmrc", ".yarnrc", ".config", ".local",
+		// Toolchain install roots. Binaries, not user data.
+		"Library/Java", "homebrew", "opt/homebrew",
+		".sdkman", ".nvm", ".volta", ".asdf", ".pyenv", ".rbenv", ".rustup",
+	}
+	// ponytail: a fixed list, so an unusual install layout still needs an
+	// entry in sandbox_read_paths. Add discovery when a machine actually
+	// hits it — guessing more paths now is how this list grows wrong.
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
 		out = append(out, filepath.Join(home, d))
 	}
 	return out
@@ -99,6 +116,18 @@ func SandboxProfile(sb Sandbox) string {
 		b.WriteString("\n  (subpath \"" + escapeSeatbelt(r) + "\")")
 	}
 	b.WriteString(")\n")
+
+	// Denying $HOME outright also denies the directory itself, which breaks
+	// path traversal: getcwd() walks up stat-ing every parent, so a shell
+	// sitting in an allowed project reports "cannot access parent
+	// directories". Anything that walks up looking for a marker file breaks
+	// with it — mvn's basedir search walks from the project to / and dies on
+	// $HOME with a misleading "Not a directory". Metadata is names, sizes
+	// and modes, not file contents, so allow it back: stat works, reading a
+	// file still does not, and readdir still needs file-read-data.
+	if sb.HomeDir != "" {
+		b.WriteString("(allow file-read-metadata (subpath \"" + escapeSeatbelt(sb.HomeDir) + "\"))\n")
+	}
 
 	readRoots := append(append([]string{}, sb.Read...), sb.Write...)
 	if len(readRoots) > 0 {
