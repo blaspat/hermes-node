@@ -1,6 +1,9 @@
 package exec
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -70,5 +73,46 @@ func TestSandboxProfile_EmptyRootsStillDenies(t *testing.T) {
 	}
 	if strings.Contains(p, "(allow file-read*\n") {
 		t.Errorf("no read allow expected without roots:\n%s", p)
+	}
+}
+
+// TestSandboxProfile_AllowsMetadataUnderHome covers the traversal fix. Denying
+// $HOME outright also denies the directory itself, so getcwd() and any tool
+// that walks up looking for a marker file (mvn's basedir search) fail with a
+// misleading "Not a directory". Metadata must be allowed back, after the deny.
+func TestSandboxProfile_AllowsMetadataUnderHome(t *testing.T) {
+	p := SandboxProfile(Sandbox{
+		HomeDir: "/Users/x",
+		Write:   []string{"/Users/x/code"},
+	})
+
+	const want = `(allow file-read-metadata (subpath "/Users/x"))`
+	if !strings.Contains(p, want) {
+		t.Fatalf("profile missing metadata allow %q:\n%s", want, p)
+	}
+	// Last-match-wins: an allow placed before the deny is dead.
+	if strings.Index(p, want) < strings.Index(p, "(deny file-read*") {
+		t.Errorf("metadata allow must follow the read deny:\n%s", p)
+	}
+	// The whole of $HOME must still be denied for content reads.
+	if !strings.Contains(p, `(subpath "/Users/x")`) {
+		t.Errorf("home no longer denied for reads:\n%s", p)
+	}
+}
+
+// TestSandboxReadDefaults_IncludesToolchainRoots pins the paths that made
+// java, go and node unlaunchable when the read deny landed: the JDK lives
+// under ~/Library/Java and Homebrew under ~/homebrew on a macOS dev box.
+func TestSandboxReadDefaults_IncludesToolchainRoots(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home dir")
+	}
+	got := sandboxReadDefaults()
+	for _, d := range []string{"Library/Java", "homebrew", ".sdkman", ".nvm"} {
+		want := filepath.Join(home, d)
+		if !slices.Contains(got, want) {
+			t.Errorf("read defaults missing toolchain root %q (got %v)", want, got)
+		}
 	}
 }
