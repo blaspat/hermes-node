@@ -401,3 +401,19 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// TestSandboxExecEnabled_DefaultsOn pins the security default: an absent
+// sandbox_exec key must mean sandboxed, and only an explicit false opts out.
+func TestSandboxExecEnabled_DefaultsOn(t *testing.T) {
+	if !(NodeConfig{}).SandboxExecEnabled() {
+		t.Error("unset sandbox_exec: got disabled, want enabled (secure default)")
+	}
+	off := false
+	if (NodeConfig{SandboxExec: &off}).SandboxExecEnabled() {
+		t.Error("sandbox_exec = false: got enabled, want disabled")
+	}
+	on := true
+	if !(NodeConfig{SandboxExec: &on}).SandboxExecEnabled() {
+		t.Error("sandbox_exec = true: got disabled, want enabled")
+	}
+}

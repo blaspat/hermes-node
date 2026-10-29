@@ -231,6 +231,19 @@ token = "abc123..."
 # existing directory.
 allowed_paths = ["/home/user", "/tmp"]
 
+# macOS only: run the exec shell under sandbox-exec so writes outside
+# allowed_paths fail. Default true. Set false to disable.
+# sandbox_exec = true
+
+# macOS only: extra directories the sandboxed shell may write to, on top
+# of allowed_paths and the build-cache defaults (~/.m2, ~/.npm, ~/go, ...).
+# sandbox_write_paths = ["/Users/you/.sdkman"]
+
+# macOS only: extra directories the sandboxed shell may read, on top of
+# what it can already write and the toolchain dotfiles (~/.ssh, ~/.gitconfig,
+# ~/.npmrc, ...). Reads elsewhere under $HOME are denied.
+# sandbox_read_paths = ["/Users/you/notes"]
+
 # Audit log location (default: ~/.hermes-node/audit.log)
 log_path = "/home/user/.hermes-node/audit.log"
 
@@ -346,6 +359,7 @@ The client sends `e2e: true` in the `hello` message. If the server doesn't suppo
 
 - **Token** is stored in plaintext in `config.toml` (mode 0600). It is never transmitted on the wire after initial pairing — the E2E handshake uses HMAC proofs instead. Revoke it on the server with `hermes node revoke --name <name>` — revocation is immediate.
 - **Path allowlist** is enforced on the laptop. Each path is symlink-resolved before the check, so symlinks escaping the allowlist are rejected.
+- **Exec is sandboxed (macOS)** — the `exec` shell runs under `sandbox-exec`. Reads and writes under `$HOME` and `/Volumes` are denied unless the path is in `allowed_paths` (plus build-cache and toolchain-dotfile defaults); writes outside are denied everywhere. Denials surface as `Operation not permitted`. Disable with `sandbox_exec = false`. Other platforms run the shell unsandboxed.
 - **TLS 1.3** required for all connections. Custom CA and cert pinning are supported.
 - **Audit log** every call with action, target, duration, exit code, and status.
 

@@ -177,7 +177,12 @@ type Session struct {
 // non-empty), otherwise the value of the HERMES_CWD env var if set,
 // otherwise the calling process's current working directory. This
 // ensures the shell starts inside allowed territory.
-func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int) (*Session, error) {
+//
+// sandbox, when non-nil, restricts what the shell may touch (see
+// SandboxFor). On macOS the whole session runs under sandbox-exec, so
+// reads and writes outside the sandbox's roots fail with EPERM even though
+// exec is otherwise an unrestricted shell. nil means unsandboxed.
+func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int, sandbox *Sandbox) (*Session, error) {
 	id, err := randomID(8)
 	if err != nil {
 		return nil, fmt.Errorf("shell: generate session id: %w", err)
@@ -202,7 +207,7 @@ func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int) 
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, bashPath, "--noprofile", "--norc", "-i")
+	cmd, _ := shellCommand(ctx, bashPath, sandbox)
 	// Build the shell environment from an explicit allowlist so the
 	// daemon's own secrets (tokens, keys, sentinel vars) don't leak
 	// into the bash subprocess. PATH, HOME, and SHELL are required
@@ -217,6 +222,9 @@ func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int) 
 		"LANG=" + os.Getenv("LANG"),
 		"TERM=" + os.Getenv("TERM"),
 		"PS1=",
+		// Interactive bash appends to ~/.bash_history on exit; that path
+		// is outside the allowlist and would fail under the sandbox.
+		"HISTFILE=/dev/null",
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

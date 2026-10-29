@@ -21,7 +21,7 @@ func newTestSession(t *testing.T) *Session {
 	t.Helper()
 	t.Setenv("HERMES_CWD", t.TempDir())
 
-	s, err := NewSession(context.Background(), nil, DefaultMaxOutputBytes)
+	s, err := NewSession(context.Background(), nil, DefaultMaxOutputBytes, nil)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestRunCtxCancelAborts(t *testing.T) {
 // A command that emits more than maxOutputBytes must have its stdout
 // truncated at the cap, not balloon to the full output size.
 func TestRunCapsStdout(t *testing.T) {
-	s, err := NewSession(context.Background(), nil, 200)
+	s, err := NewSession(context.Background(), nil, 200, nil)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestRunEnvIsolation(t *testing.T) {
 	// Set a secret that should NOT leak into the shell.
 	t.Setenv("HERMES_TEST_SECRET", "s3cret-d0nt-leak")
 
-	s, err := NewSession(context.Background(), nil, DefaultMaxOutputBytes)
+	s, err := NewSession(context.Background(), nil, DefaultMaxOutputBytes, nil)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}

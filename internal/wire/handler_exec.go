@@ -28,7 +28,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -215,14 +214,9 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// client cannot bypass the allowlist by simply omitting the cwd
 	// field.
 	//
-	// If the cwd is outside the allowlist and at least one allowed
-	// path is configured, we auto-cd to the first allowed path and
-	// prepend a warning to stderr — the command still runs. This
-	// prevents the operator from locking themselves out with a
-	// stray `cd /etc` while still keeping the guardrail visible.
-	//
-	// An empty Allowed list (nil/empty) is treated differently
-	// depending on whether the cwd was explicit:
+	// A cwd outside the allowlist is refused with path_not_allowed and
+	// the command does not run. An empty Allowed list (nil/empty) is
+	// treated differently depending on whether the cwd was explicit:
 	//   - explicit cwd + empty Allowed → reject (deny-by-default)
 	//   - implicit cwd + empty Allowed → allow (backward compatible:
 	//     the operator hasn't configured allowed_paths, so the shell
@@ -244,35 +238,31 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// check entirely (backward compatible).
 	shouldCheck := explicitCwd || len(h.Allowed) > 0
 
-	var cwdNote string
+	// Deny-by-default: a cwd outside the allowlist is rejected, never
+	// silently relocated. Relocating ran the command in a directory the
+	// caller did not ask for — the output looked like success while
+	// answering a different question, which is worse than a refusal.
 	if cwd != "" && shouldCheck {
 		ok, canon, err := fs.Check(h.Allowed, cwd)
 		canonical = canon
 		if err != nil || !ok {
-			if len(h.Allowed) > 0 {
-				// Outside allowlist but we have allowed paths to
-				// fall back to. Auto-cd to the first one.
-				firstAllowed := h.Allowed[0]
-				// Shell-quote: wrap in single quotes, escape any
-				// embedded single quotes per POSIX convention.
-				sq := "'" + strings.ReplaceAll(firstAllowed, "'", "'\\''") + "'"
-				p.Command = "cd " + sq + " 2>/dev/null\n" + p.Command
-				canonical = firstAllowed
-				cwdNote = "[hermes-node: cwd was outside allowed_paths — auto-cd'd to " + firstAllowed + "]"
-			} else {
-				// Explicit cwd with no allowlist configured → reject.
-				h.auditExec(p, audit.Entry{
-					TS:     h.now(),
-					Action: "exec",
-					Target: canonical,
-					Status: "error",
-				})
-				return NewExecResultEnvelope(requestID, ExecResultPayload{
-					Status:     "error",
-					ExitCode:   -1,
-					DurationMS: 0,
-				}), nil
+			detail := fmt.Sprintf("%q is not in allowed_paths", cwd)
+			if len(h.Allowed) == 0 {
+				detail = "no allowed_paths configured"
 			}
+			h.auditExec(p, audit.Entry{
+				TS:     h.now(),
+				Action: "exec",
+				Target: canonical,
+				Status: "denied",
+				Error:  "path_not_allowed",
+			})
+			return NewExecResultEnvelope(requestID, ExecResultPayload{
+				Status:     "error",
+				ExitCode:   -1,
+				Stderr:     "[hermes-node: path_not_allowed: " + detail + "]",
+				DurationMS: 0,
+			}), nil
 		}
 	}
 
@@ -318,16 +308,6 @@ func (h *ExecHandler) Handle(ctx context.Context, requestID string, payload map[
 	// stream.
 	if useChunks {
 		h.Shell.SetChunkWriter(nil, 0)
-	}
-
-	// Prepend auto-cd warning to stderr if the cwd was outside
-	// the allowlist.
-	if cwdNote != "" {
-		if stderr == "" {
-			stderr = cwdNote + "\n"
-		} else {
-			stderr = cwdNote + "\n" + stderr
-		}
 	}
 
 	// Cap each stream independently. capOutput is total to the
