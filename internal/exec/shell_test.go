@@ -8,6 +8,7 @@ package exec
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -375,5 +376,32 @@ func TestCloseIdempotent(t *testing.T) {
 	}
 	if err != ErrClosed && !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("Run after Close: got %v, want ErrClosed or wrap", err)
+	}
+}
+
+// TestNewSession_ReportsSandboxed pins the flag main.go warns on. A
+// session must report whether the sandbox was actually applied, not merely
+// whether one was requested — off macOS the request is silently ignored,
+// and that is exactly the case the warning exists for.
+func TestNewSession_ReportsSandboxed(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := NewSession(context.Background(), []string{dir}, DefaultMaxOutputBytes, nil)
+	if err != nil {
+		t.Fatalf("NewSession(nil sandbox): %v", err)
+	}
+	defer s.Close()
+	if s.Sandboxed() {
+		t.Error("nil sandbox: got Sandboxed()=true, want false")
+	}
+
+	sb := &Sandbox{HomeDir: dir, Write: []string{dir}}
+	s2, err := NewSession(context.Background(), []string{dir}, DefaultMaxOutputBytes, sb)
+	if err != nil {
+		t.Fatalf("NewSession(sandbox): %v", err)
+	}
+	defer s2.Close()
+	if want := runtime.GOOS == "darwin"; s2.Sandboxed() != want {
+		t.Errorf("requested sandbox on %s: got Sandboxed()=%v, want %v", runtime.GOOS, s2.Sandboxed(), want)
 	}
 }
