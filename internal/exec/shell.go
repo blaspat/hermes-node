@@ -106,6 +106,12 @@ type Session struct {
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
 
+	// sandboxed records whether the seatbelt sandbox was actually
+	// applied. It is false when the caller asked for a sandbox but the
+	// launcher was missing — a case the caller must be able to warn
+	// about, since the fallback is a silently unsandboxed shell.
+	sandboxed bool
+
 	closed  bool
 	closeCh chan struct{}
 
@@ -207,7 +213,7 @@ func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int, 
 		}
 	}
 
-	cmd, _ := shellCommand(ctx, bashPath, sandbox)
+	cmd, sandboxed := shellCommand(ctx, bashPath, sandbox)
 	// Build the shell environment from an explicit allowlist so the
 	// daemon's own secrets (tokens, keys, sentinel vars) don't leak
 	// into the bash subprocess. PATH, HOME, and SHELL are required
@@ -251,6 +257,7 @@ func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int, 
 	s := &Session{
 		id:             id,
 		cmd:            cmd,
+		sandboxed:      sandboxed,
 		stdin:          stdin,
 		closeCh:        make(chan struct{}),
 		cwd:            initialCwd,
@@ -280,6 +287,11 @@ func NewSession(ctx context.Context, allowedPaths []string, maxOutputBytes int, 
 // ID returns the session identifier. Useful for log correlation;
 // the value is stable for the lifetime of the Session.
 func (s *Session) ID() string { return s.id }
+
+// Sandboxed reports whether the seatbelt sandbox is actually in force. A
+// session built with a non-nil Sandbox can still report false when the
+// launcher is absent, in which case the shell runs unsandboxed.
+func (s *Session) Sandboxed() bool { return s.sandboxed }
 
 // SetChunkWriter configures the next Run call to stream partial output
 // via w in chunks of at least chunkSize bytes. The writer is consumed

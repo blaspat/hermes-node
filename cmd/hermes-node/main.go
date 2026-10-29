@@ -944,6 +944,12 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 			if err != nil {
 				return fmt.Errorf("start shell: %w", err)
 			}
+			// A sandbox was requested but the seatbelt launcher is
+			// missing, so the shell runs unrestricted. Say so once
+			// per reconnect instead of failing open in silence.
+			if sandbox != nil && !session.Sandboxed() {
+				log.Warn("sandbox_exec is on but the sandbox could not be applied; exec runs UNSANDBOXED (set sandbox_exec = false to silence this)")
+			}
 			// Publish the new session so the next Setup call
 			// can close it. We intentionally do NOT close it
 			// here — the session is meant to live for the
