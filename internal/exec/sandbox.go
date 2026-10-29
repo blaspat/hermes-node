@@ -57,6 +57,9 @@ func sandboxReadDefaults() []string {
 		"Library/Java", "homebrew", "opt/homebrew",
 		".sdkman", ".nvm", ".volta", ".asdf", ".pyenv", ".rbenv", ".rustup",
 	}
+	// ponytail: a fixed list, so an unusual install layout still needs an
+	// entry in sandbox_read_paths. Add discovery when a machine actually
+	// hits it — guessing more paths now is how this list grows wrong.
 	out := make([]string, 0, len(dirs))
 	for _, d := range dirs {
 		out = append(out, filepath.Join(home, d))
