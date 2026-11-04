@@ -81,7 +81,7 @@ First message after WSS upgrade.
   "node_version": "0.1.0",
   "platform": "darwin",
   "arch": "arm64",
-  "capabilities": ["exec", "read", "write"]
+  "capabilities": ["exec", "exec_chunk", "read", "write", "read_chunk", "write_chunk"]
 }
 ```
 
@@ -250,7 +250,32 @@ When both sides advertise `exec_chunk` in capabilities, the node sends increment
 }
 ```
 
-Files are read as bytes and base64-encoded in the result. The 10 MB cap applies; larger files return `error: "file_too_large"`.
+Files are read as bytes and base64-encoded in the result. The 10 MB cap applies; larger files return `error: "file_too_large"` — unless both sides advertise `read_chunk`, in which case see §3.9a.
+
+### 3.9a `read_chunk` (node → server) — streaming file reads
+
+When the node sees `read_chunk` in the server's `hello_ack` capabilities (§3.2), it switches files **larger than one chunk** (§3.8, `chunk_size`) from a single `read_result` to a stream of `read_chunk` frames with the same request `id`. No extra call from the server — the chunked read is still triggered by the §3.8 `read` message.
+
+```json
+{
+  "type": "read_chunk",
+  "id": "uuid-v4",
+  "seq": 3,
+  "data": "<base64>",           // empty on the final frame (or an I/O error)
+  "more": true,
+  "status": "ok",               // final frame only
+  "size_bytes": 1234,          // final frame only
+  "sha256": "<hex>",           // final frame only
+  "error": "io_error",         // final frame only, on failure
+  "error_detail": "..."
+}
+```
+
+- Frames are ordered. `seq` starts at 1 and increments per frame.
+- The final frame has `more: false` and carries `status` / `size_bytes` / `sha256` (or `error` / `error_detail` on failure). A zero-byte file produces a single empty final frame.
+- On a mid-stream I/O error the node emits one final frame with `status: "error"` so the server's assembly can be torn down.
+- The node caps the total transfer at `fs_chunk_max_mb` (default 512 MB, 0 = unlimited). Exceeding it → `read_result` `file_too_large`.
+- **Fallback:** if either side does not advertise `read_chunk`, the node sends a single `read_result` (§3.9) and larger files return `file_too_large`.
 
 ### 3.10 `write` (server → node)
 
@@ -272,10 +297,35 @@ Files are read as bytes and base64-encoded in the result. The 10 MB cap applies;
   "id": "uuid-v4",
   "status": "ok" | "error",
   "bytes_written": 1234,
+  "sha256": "<hex>",           // present on ok (chunked write path)
   "error": "path_not_allowed" | "io_error",
   "error_detail": "..."
 }
 ```
+
+### 3.11a `write_chunk` (server → node) — chunked file writes
+
+Used instead of a single §3.10 `write` when the node advertised `write_chunk` in its `hello` (§3.1). The server opens the stream; the node assembles it into a temp file in the target's directory and applies it atomically on the final chunk (same-filesystem rename), so a torn write never leaves a half-written file.
+
+```json
+{
+  "type": "write_chunk",
+  "id": "uuid-v4",
+  "seq": 1,
+  "data": "<base64>",
+  "more": true,
+  "path": "/Users/.../x.py",  // seq 1 only
+  "mode": "create" | "overwrite" | "append",  // seq 1 only, default "overwrite"
+  "size_bytes": 1234,          // seq 1 only: total file size
+  "sha256": "<hex>"           // seq 1 only: expected total
+}
+```
+
+- `seq` starts at 1. `seq 1` carries the header fields (`path`, `mode`, `size_bytes`, `sha256`); subsequent chunks carry only `seq` / `data` / `more`.
+- The final chunk has `more: false` and triggers the node to verify the accumulated SHA-256 and total size, then apply the write. The node replies with a `write_result` (§3.11) — `ok` with `sha256`, or `error` with one of `bad_sequence`, `bad_request`, `size_mismatch`, `sha_mismatch`, `bad_base64`, `path_not_allowed`, `file_too_large`, `file_exists`, `io_error`.
+- Any error aborts the in-flight assembly: the temp file is removed and the request id is forgotten, so a retry starts clean.
+- Total transfer capped by `fs_chunk_max_mb` (§8); `size_bytes` above the cap → `file_too_large` up front, before any chunk is streamed.
+- **Fallback:** if the node did not advertise `write_chunk`, the server must use the single-shot §3.10 `write` with its 10 MB cap.
 
 ### 3.12 `ping` / `pong` (bidirectional)
 Keepalive.
@@ -345,7 +395,7 @@ A handler that wants to fail cleanly should return an error; panics are reserved
 | 4005 | Server shutting down |
 | 4006 | Token revoked (after successful auth, mid-session) |
 
-**Application error codes** (in `error` messages or `*_result.status=error`):
+**Application error reasons.** Result payloads (`*_result.status=error`) carry the `Reason` string in their `error` field; the `Code` column is a stable reference identifier for logs and audit, not a value sent on the wire. Out-of-band `error` envelopes (§3.13) carry both `code` and `reason`.
 | Code | Reason | Meaning |
 |------|--------|---------|
 | 1000 | ok | Success |
@@ -353,6 +403,10 @@ A handler that wants to fail cleanly should return an error; panics are reserved
 | 2002 | file_not_found | Read/write on non-existent file |
 | 2003 | file_too_large | File exceeded 10 MB cap |
 | 2004 | io_error | Underlying I/O error |
+| 2005 | size_mismatch | Chunked write: bytes received ≠ declared `size_bytes` (§3.11a) |
+| 2006 | sha_mismatch | Chunked write: SHA-256 of assembled file ≠ expected (§3.11a) |
+| 2007 | bad_sequence | Chunked write: `seq` gap or out-of-order (§3.11a) |
+| 2008 | bad_base64 | Chunked write: undecodable chunk payload (§3.11a) |
 | 3001 | exec_timeout | Command exceeded timeout |
 | 3002 | exec_failed | Non-zero exit, but command ran |
 | 5000 | internal_error | Node/server bug |
@@ -394,7 +448,7 @@ A handler that wants to fail cleanly should return an error; panics are reserved
 
 - WSS frame size: 16 MB max (configurable server-side, default 16 MB to comfortably fit a 10 MB `write` request + envelope).
 - Output cap: 10 MB per stream per `exec` call. Larger → truncated with `truncated: true`.
-- File size cap: 10 MB for `read`/`write`. Larger → error `file_too_large`.
+- File size cap: 10 MB for single-shot `read`/`write`. Larger → error `file_too_large`. Chunked transfers (§3.9a/§3.11a) are capped by `fs_chunk_max_mb` in `config.toml` (`[node]` section, default 512 MB, 0 = unlimited); larger → `file_too_large`.
 - Message rate limit: 100 calls/second per node, sliding window. Excess → server closes with `4004`.
 
 ---
