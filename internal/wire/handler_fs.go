@@ -42,11 +42,17 @@ package wire
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
+	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/blaspat/hermes-node/internal/audit"
@@ -69,6 +75,10 @@ const MaxFileBytes = 10 * 1024 * 1024
 type FileIO interface {
 	Stat(path string) (os.FileInfo, error)
 	ReadFile(path string) ([]byte, error)
+	// Open returns a readable stream of the file, used by the
+	// chunked read path to stream large files without loading them
+	// fully into memory (PROTOCOL.md §3.9a).
+	Open(path string) (io.ReadCloser, error)
 	WriteFile(path string, data []byte, perm os.FileMode, mode WriteMode) (int, error)
 }
 
@@ -97,6 +107,9 @@ type realOS struct{}
 
 func (realOS) Stat(path string) (os.FileInfo, error) { return os.Stat(path) }
 func (realOS) ReadFile(path string) ([]byte, error)  { return os.ReadFile(path) }
+func (realOS) Open(path string) (io.ReadCloser, error) {
+	return os.Open(path)
+}
 func (realOS) WriteFile(path string, data []byte, perm os.FileMode, mode WriteMode) (int, error) {
 	flags := os.O_WRONLY | os.O_CREATE
 	switch mode {
@@ -132,9 +145,45 @@ type FileSystem struct {
 	Allowed  []string
 	AuditLog AuditWriter
 
+	// WriteFunc sends envelopes on the wire; required for the
+	// chunked read path (PROTOCOL.md §3.9a). Set from the
+	// dispatcher's WriteEnvelope, mirroring ExecHandler.
+	WriteFunc func(ctx context.Context, env Envelope) error
+
+	// ChunkSize is the byte size of each read_chunk / write_chunk
+	// payload. Reuses the exec chunk_size config knob.
+	ChunkSize int
+
+	// FsChunkMaxBytes caps the total size of a chunked read or
+	// write (0 = unlimited).
+	FsChunkMaxBytes int
+
+	// serverSupportsReadChunk is set via SetServerCapabilities when
+	// the server advertises "read_chunk" in its hello_ack.
+	serverSupportsReadChunk bool
+
+	// writes tracks in-flight chunked-write assemblies, keyed by
+	// request id. Populated by WriteChunkHandler as chunks arrive;
+	// removed when the final chunk applies the write.
+	writes map[string]*writeAssembly
+
 	// now is the clock used for the audit entry's TS. Tests may
 	// override it to assert timestamps deterministically.
 	now func() time.Time
+}
+
+// writeAssembly is the in-flight state for one chunked write, keyed
+// by request id. The dispatcher is single-goroutine, so no lock.
+type writeAssembly struct {
+	path      string
+	mode      WriteMode
+	sizeBytes int64
+	expSHA    string
+	hasher    hash.Hash
+	tmp       *os.File
+	tmpPath   string
+	total     int64
+	seq       int
 }
 
 // NewFileSystem returns a FileSystem wired with realOS.
@@ -143,6 +192,7 @@ func NewFileSystem(allowed []string, auditLog AuditWriter) *FileSystem {
 		IO:       realOS{},
 		Allowed:  allowed,
 		AuditLog: auditLog,
+		writes:   make(map[string]*writeAssembly),
 		now:      time.Now,
 	}
 }
@@ -215,6 +265,26 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 			ErrorDetail: fmt.Sprintf("stat: %v", err),
 		}), nil
 	}
+
+	// Chunked read (PROTOCOL.md §3.9a): when the server advertises
+	// read_chunk and the file exceeds the chunk size, stream it in
+	// read_chunk envelopes instead of one base64 read_result. The
+	// legacy 10 MB cap still bounds the non-chunked path.
+	useChunks := fsys.serverSupportsReadChunk &&
+		fsys.WriteFunc != nil && fsys.ChunkSize > 0 &&
+		info.Size() > int64(fsys.ChunkSize)
+	if useChunks {
+		if fsys.FsChunkMaxBytes > 0 && info.Size() > int64(fsys.FsChunkMaxBytes) {
+			fsys.audit("read", canonical, "error", 0)
+			return NewReadResultEnvelope(requestID, ReadResultPayload{
+				Status:      "error",
+				Error:       "file_too_large",
+				ErrorDetail: fmt.Sprintf("%q is %d bytes; chunked cap is %d", canonical, info.Size(), fsys.FsChunkMaxBytes),
+			}), nil
+		}
+		return fsys.streamRead(ctx, requestID, canonical, info.Size())
+	}
+
 	if info.Size() > MaxFileBytes {
 		fsys.audit("read", canonical, "error", 0)
 		return NewReadResultEnvelope(requestID, ReadResultPayload{
@@ -240,6 +310,356 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 		ContentB64: base64.StdEncoding.EncodeToString(data),
 		SizeBytes:  int64(len(data)),
 	}), nil
+}
+
+// streamRead opens the file and streams it as read_chunk envelopes.
+// The final chunk (more=false) carries status/size/sha256. On an I/O
+// error mid-stream we emit a final chunk with status=error so the
+// server's assembly can be torn down cleanly. We return NoResponse so
+// the dispatcher skips the normal (single) response write — we already
+// sent our own result frames via WriteFunc.
+func (fsys *FileSystem) streamRead(ctx context.Context, requestID, path string, size int64) (Envelope, error) {
+	f, err := fsys.IO.Open(path)
+	if err != nil {
+		fsys.audit("read", path, "error", 0)
+		_ = fsys.WriteFunc(ctx, NewReadChunkEnvelope(requestID, ReadChunkPayload{
+			Seq: 1, Data: "", More: false,
+			Status: "error", Error: "io_error",
+			ErrorDetail: fmt.Sprintf("open: %v", err),
+		}))
+		return Envelope{NoResponse: true}, nil
+	}
+	defer f.Close()
+
+	hash := sha256.New()
+	buf := make([]byte, fsys.ChunkSize)
+	seq := 0
+	status := "ok"
+	var errDetail string
+	// sendChunk writes one read_chunk. more=false marks the last
+	// data-bearing frame; a zero-byte file produces no data frames.
+	sendChunk := func(data []byte, more bool) error {
+		seq++
+		_, _ = hash.Write(data)
+		payload := ReadChunkPayload{
+			Seq:  seq,
+			Data: base64.StdEncoding.EncodeToString(data),
+			More: more,
+		}
+		return fsys.WriteFunc(ctx, NewReadChunkEnvelope(requestID, payload))
+	}
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			// Peek ahead cheaply: we only know "this is the last
+			// frame" after the read that hit EOF, so send this
+			// frame with more=true and a following empty final
+			// frame when more data was still possible. The single
+			// read case (file smaller than the buffer) is caught
+			// by the rerr==EOF check on the next loop pass.
+			if err := sendChunk(buf[:n], true); err != nil {
+				status = "error"
+				errDetail = fmt.Sprintf("write chunk: %v", err)
+				break
+			}
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				break
+			}
+			status = "error"
+			errDetail = fmt.Sprintf("read: %v", rerr)
+			break
+		}
+	}
+
+	final := ReadChunkPayload{
+		Seq:       seq + 1,
+		More:      false,
+		Status:    status,
+		SizeBytes: size,
+		SHA256:    hex.EncodeToString(hash.Sum(nil)),
+	}
+	if status == "error" {
+		final.Error = "io_error"
+		final.ErrorDetail = errDetail
+	}
+	_ = fsys.WriteFunc(context.Background(), NewReadChunkEnvelope(requestID, final))
+	if status == "ok" {
+		fsys.audit("read", path, "ok", size)
+	} else {
+		fsys.audit("read", path, "error", size)
+	}
+	return Envelope{NoResponse: true}, nil
+}
+
+// SetServerCapabilities checks the server's advertised capabilities
+// (from its hello_ack) and enables the chunked read path when
+// "read_chunk" is present. Call after the handshake, mirroring
+// ExecHandler.SetServerCapabilities.
+func (fsys *FileSystem) SetServerCapabilities(caps []string) {
+	for _, c := range caps {
+		if c == "read_chunk" {
+			fsys.serverSupportsReadChunk = true
+			return
+		}
+	}
+}
+
+// WriteChunkHandler is the wire.Handler entry point for `write_chunk`
+// calls (PROTOCOL.md §3.11a). The dispatcher registers it for
+// TypeWriteChunk; one call handles a single chunk of one write.
+//
+// On the first chunk (seq=1) the path/mode/size/sha256 header fields
+// open a temp file in the target's directory. Each chunk's base64
+// payload is appended to that temp file. On the final chunk
+// (more=false) the accumulated bytes are verified against the header's
+// size + sha256, then applied atomically under the requested write
+// mode; the write_result envelope is returned so the server's
+// original `write` waiter resolves.
+func (fsys *FileSystem) WriteChunkHandler(ctx context.Context, requestID string, payload map[string]any) (Envelope, error) {
+	var p WriteChunkPayload
+	if err := reMarshalInto(payload, &p); err != nil {
+		fsys.audit("write", "", "rejected", 0)
+		return NewWriteResultEnvelope(requestID, WriteResultPayload{
+			Status:      "error",
+			Error:       "io_error",
+			ErrorDetail: fmt.Sprintf("decode write_chunk: %v", err),
+		}), nil
+	}
+
+	asm, exists := fsys.writes[requestID]
+	if !exists {
+		if p.Seq != 1 {
+			fsys.audit("write", p.Path, "error", 0)
+			return NewWriteResultEnvelope(requestID, WriteResultPayload{
+				Status:      "error",
+				Error:       "bad_sequence",
+				ErrorDetail: fmt.Sprintf("first write_chunk has seq %d, want 1", p.Seq),
+			}), nil
+		}
+		if p.Path == "" || p.SHA256 == "" {
+			fsys.audit("write", "", "rejected", 0)
+			return NewWriteResultEnvelope(requestID, WriteResultPayload{
+				Status:      "error",
+				Error:       "bad_request",
+				ErrorDetail: "write_chunk seq=1 requires path and sha256",
+			}), nil
+		}
+		// Pre-flight allowlist — deny before allocating the temp
+		// file, same convention as the legacy write path.
+		allowed, canonical, err := checkAllowed(fsys.Allowed, p.Path)
+		if err != nil || !allowed {
+			auditTarget := p.Path
+			if canonical != "" && canonical != p.Path {
+				auditTarget = fmt.Sprintf("%q (resolved %q)", p.Path, canonical)
+			}
+			fsys.audit("write", auditTarget, "error", 0)
+			return NewWriteResultEnvelope(requestID, WriteResultPayload{
+				Status:      "error",
+				Error:       "path_not_allowed",
+				ErrorDetail: fmt.Sprintf("%q is not in the configured allowlist", auditTarget),
+			}), nil
+		}
+		// Cap the total transfer up front so we don't stream a
+		// 10 GB file before the size check.
+		if fsys.FsChunkMaxBytes > 0 && p.SizeBytes > int64(fsys.FsChunkMaxBytes) {
+			fsys.audit("write", canonical, "error", 0)
+			return NewWriteResultEnvelope(requestID, WriteResultPayload{
+				Status:      "error",
+				Error:       "file_too_large",
+				ErrorDetail: fmt.Sprintf("%q is %d bytes; chunked cap is %d", canonical, p.SizeBytes, fsys.FsChunkMaxBytes),
+			}), nil
+		}
+		// The temp file lives in the target's directory so the
+		// final apply can be an atomic same-filesystem rename.
+		// (The legacy single-shot write uses the open flags from
+		// WriteFile; the chunked path assembles first, then moves.)
+		tmp, err := os.CreateTemp(filepath.Dir(canonical), ".hermes-write-*")
+		if err != nil {
+			fsys.audit("write", canonical, "error", 0)
+			return NewWriteResultEnvelope(requestID, WriteResultPayload{
+				Status:      "error",
+				Error:       "io_error",
+				ErrorDetail: fmt.Sprintf("create temp: %v", err),
+			}), nil
+		}
+		asm = &writeAssembly{
+			path:      canonical,
+			mode:      writeModeFor(p.Mode),
+			sizeBytes: p.SizeBytes,
+			expSHA:    p.SHA256,
+			hasher:    sha256.New(),
+			tmp:       tmp,
+			tmpPath:   tmp.Name(),
+		}
+		fsys.writes[requestID] = asm
+	} else {
+		if p.Seq != asm.seq+1 {
+			fsys.abortWrite(requestID, asm)
+			fsys.audit("write", asm.path, "error", 0)
+			return NewWriteResultEnvelope(requestID, WriteResultPayload{
+				Status:      "error",
+				Error:       "bad_sequence",
+				ErrorDetail: fmt.Sprintf("write_chunk seq %d, want %d", p.Seq, asm.seq+1),
+			}), nil
+		}
+	}
+	asm.seq = p.Seq
+
+	// Append this chunk's bytes to the temp file + hasher.
+	if p.Data != "" {
+		data, err := base64.StdEncoding.DecodeString(p.Data)
+		if err != nil {
+			fsys.abortWrite(requestID, asm)
+			fsys.audit("write", asm.path, "error", 0)
+			return NewWriteResultEnvelope(requestID, WriteResultPayload{
+				Status:      "error",
+				Error:       "bad_base64",
+				ErrorDetail: fmt.Sprintf("chunk seq %d: %v", p.Seq, err),
+			}), nil
+		}
+		if _, err := asm.tmp.Write(data); err != nil {
+			fsys.abortWrite(requestID, asm)
+			fsys.audit("write", asm.path, "error", 0)
+			return NewWriteResultEnvelope(requestID, WriteResultPayload{
+				Status:      "error",
+				Error:       "io_error",
+				ErrorDetail: fmt.Sprintf("write temp: %v", err),
+			}), nil
+		}
+		_, _ = asm.hasher.Write(data)
+		asm.total += int64(len(data))
+	}
+
+	if p.More {
+		// More chunks coming — keep the assembly open. No response.
+		return Envelope{NoResponse: true}, nil
+	}
+
+	// Final chunk: verify + apply.
+	sum := hex.EncodeToString(asm.hasher.Sum(nil))
+	if asm.total != asm.sizeBytes {
+		fsys.abortWrite(requestID, asm)
+		fsys.audit("write", asm.path, "error", 0)
+		return NewWriteResultEnvelope(requestID, WriteResultPayload{
+			Status:      "error",
+			Error:       "size_mismatch",
+			ErrorDetail: fmt.Sprintf("got %d bytes, want %d", asm.total, asm.sizeBytes),
+		}), nil
+	}
+	if !strings.EqualFold(sum, asm.expSHA) {
+		fsys.abortWrite(requestID, asm)
+		fsys.audit("write", asm.path, "error", 0)
+		return NewWriteResultEnvelope(requestID, WriteResultPayload{
+			Status:      "error",
+			Error:       "sha_mismatch",
+			ErrorDetail: fmt.Sprintf("computed %s, want %s", sum, asm.expSHA),
+		}), nil
+	}
+
+	applyErr, bytes := fsys.applyChunkedWrite(asm)
+	if applyErr != "" {
+		fsys.audit("write", asm.path, "error", 0)
+		return NewWriteResultEnvelope(requestID, WriteResultPayload{
+			Status:      "error",
+			Error:       applyErr,
+			ErrorDetail: fmt.Sprintf("apply %q: %s", asm.path, applyErr),
+		}), nil
+	}
+	fsys.audit("write", asm.path, "ok", bytes)
+	return NewWriteResultEnvelope(requestID, WriteResultPayload{
+		Status:       "ok",
+		BytesWritten: bytes,
+		SHA256:       sum,
+	}), nil
+}
+
+// writeModeFor maps the protocol's write.mode string to the package
+// enum. Mirrors the inline switch in the legacy write path; an
+// unknown value falls back to overwrite (the protocol default).
+func writeModeFor(s string) WriteMode {
+	switch s {
+	case "create":
+		return WriteCreate
+	case "append":
+		return WriteAppend
+	case "", "overwrite":
+		return WriteOverwrite
+	default:
+		return WriteOverwrite
+	}
+}
+
+// abortWrite tears down a chunked-write assembly on any error,
+// removing the temp file and the registry entry so a retry starts
+// clean.
+func (fsys *FileSystem) abortWrite(requestID string, asm *writeAssembly) {
+	if asm.tmp != nil {
+		_ = asm.tmp.Close()
+		asm.tmp = nil
+	}
+	if asm.tmpPath != "" {
+		_ = os.Remove(asm.tmpPath)
+	}
+	delete(fsys.writes, requestID)
+}
+
+// applyChunkedWrite moves the assembled temp file into place under
+// the requested mode. The temp file lives in the target's directory,
+// so overwrite/create are atomic renames (zero extra memory); only
+// append has to stream the temp back through the target, since it
+// concatenates onto existing content.
+func (fsys *FileSystem) applyChunkedWrite(asm *writeAssembly) (string, int64) {
+	_ = asm.tmp.Close()
+	switch asm.mode {
+	case WriteOverwrite, WriteCreate:
+		// Create refuses to clobber an existing target (the legacy
+		// write path's file_exists semantics).
+		if asm.mode == WriteCreate {
+			if _, err := fsys.IO.Stat(asm.path); err == nil {
+				_ = os.Remove(asm.tmpPath)
+				return "file_exists", 0
+			}
+		}
+		if err := os.Rename(asm.tmpPath, asm.path); err != nil {
+			_ = os.Remove(asm.tmpPath)
+			return "io_error", 0
+		}
+		return "", asm.total
+	case WriteAppend:
+		// Append streams the temp onto the existing target. This is
+		// the only mode that needs the bytes in memory; it's also
+		// the rare one.
+		// ponytail: temp loaded whole — fine because append targets are
+		// usually log-sized; if someone appends 512 MiB to a log, that
+		// path allocates 512 MiB. Swap for io.Copy(temp→open target) if
+		// it ever matters.
+		data, err := os.ReadFile(asm.tmpPath)
+		if err != nil {
+			_ = os.Remove(asm.tmpPath)
+			return "io_error", 0
+		}
+		_ = os.Remove(asm.tmpPath)
+		n, err := fsys.IO.WriteFile(asm.path, data, fsys.permForTarget(asm.path), WriteAppend)
+		if err != nil {
+			return "io_error", 0
+		}
+		return "", int64(n)
+	default:
+		_ = os.Remove(asm.tmpPath)
+		return "io_error", 0
+	}
+}
+
+// permForTarget returns the permission bits to use when (re)creating
+// the target. Mirrors the legacy write path's "follow the existing
+// file, else 0644" convention.
+func (fsys *FileSystem) permForTarget(path string) os.FileMode {
+	if info, err := fsys.IO.Stat(path); err == nil {
+		return info.Mode().Perm()
+	}
+	return 0o644
 }
 
 // WriteHandler is the wire.Handler entry point for `write` calls.

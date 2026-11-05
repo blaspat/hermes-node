@@ -52,6 +52,11 @@ type NodeConfig struct {
 	BackoffMax       string   `toml:"backoff_max"`
 	BackoffFactor    float64  `toml:"backoff_factor"`
 	ChunkSize        int      `toml:"chunk_size"`
+	// FsChunkMaxMB caps the total size of a chunked read or write
+	// transfer in MiB. Unset means the 512 MiB default; an explicit
+	// 0 means unlimited. The legacy single-shot read/write path
+	// keeps its own 10 MB cap (MaxFileBytes).
+	FsChunkMaxMB *int `toml:"fs_chunk_max_mb"`
 }
 
 // SandboxExecEnabled reports whether the exec shell should run under the
@@ -114,6 +119,21 @@ func (n NodeConfig) ChunkSizeValue() int {
 		return maxChunkSize
 	}
 	return n.ChunkSize
+}
+
+// FsChunkMaxBytesValue returns the total-size cap for a chunked
+// read/write transfer in bytes. Unset → 512 MiB default. An explicit
+// 0 → unlimited. Negative → 0 (unlimited), mirroring the "disable by
+// zeroing" idiom used elsewhere in the config.
+func (n NodeConfig) FsChunkMaxBytesValue() int {
+	const defaultFsChunkMaxMB = 512
+	if n.FsChunkMaxMB == nil {
+		return defaultFsChunkMaxMB * 1024 * 1024
+	}
+	if *n.FsChunkMaxMB <= 0 {
+		return 0
+	}
+	return *n.FsChunkMaxMB * 1024 * 1024
 }
 
 // ServerConfig describes how the node should validate the server's TLS cert.

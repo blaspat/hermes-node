@@ -878,7 +878,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				NodeVersion:  version,
 				Platform:     runtime.GOOS,
 				Arch:         runtime.GOARCH,
-				Capabilities: []string{"exec", "exec_chunk", "read", "write"},
+				Capabilities: []string{"exec", "exec_chunk", "read", "write", "read_chunk", "write_chunk"},
 				TLSConfig:    tlsCfg,
 				ProxyURL:     cfg.Node.ProxyURL,
 				DebugLog:     log.Debug,
@@ -967,6 +967,10 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 			execHandler.ChunkSize = cfg.Node.ChunkSizeValue()
 			execHandler.SetServerCapabilities(c.ServerCapabilities())
 			fsys := wire.NewFileSystem(cfg.Node.AllowedPaths, auditLog)
+			fsys.WriteFunc = d.WriteEnvelope
+			fsys.ChunkSize = cfg.Node.ChunkSizeValue()
+			fsys.FsChunkMaxBytes = cfg.Node.FsChunkMaxBytesValue()
+			fsys.SetServerCapabilities(c.ServerCapabilities())
 			if err := d.Register(wire.TypeExec, execHandler.Handle); err != nil {
 				return fmt.Errorf("register exec: %w", err)
 			}
@@ -975,6 +979,9 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 			}
 			if err := d.Register(wire.TypeWrite, fsys.WriteHandler); err != nil {
 				return fmt.Errorf("register write: %w", err)
+			}
+			if err := d.Register(wire.TypeWriteChunk, fsys.WriteChunkHandler); err != nil {
+				return fmt.Errorf("register write_chunk: %w", err)
 			}
 			return nil
 		},

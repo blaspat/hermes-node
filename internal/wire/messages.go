@@ -33,8 +33,10 @@ const (
 	TypeExecChunk   MessageType = "exec_chunk"
 	TypeRead        MessageType = "read"
 	TypeReadResult  MessageType = "read_result"
+	TypeReadChunk   MessageType = "read_chunk"
 	TypeWrite       MessageType = "write"
 	TypeWriteResult MessageType = "write_result"
+	TypeWriteChunk  MessageType = "write_chunk"
 
 	// Operational / lifecycle.
 	TypePing  MessageType = "ping"
@@ -133,7 +135,7 @@ func NewHelloEnvelope(protocolVersion, nodeName, nodeVersion, platform, arch str
 }
 
 // HelloAckPayload is the body of a `hello_ack` message (PROTOCOL.md
-// §3.2). The client treats it as the only acceptable response to
+// \u00a73.2). The client treats it as the only acceptable response to
 // `hello`; a `hello_err` triggers a different path.
 type HelloAckPayload struct {
 	ProtocolVersion string   `json:"protocol_version"`
@@ -251,7 +253,7 @@ func NewExecResultEnvelope(requestID string, result ExecResultPayload) Envelope 
 }
 
 // ExecChunkPayload is the body of an `exec_chunk` message
-// (PROTOCOL.md §3.7a). It carries a single chunk of streaming output
+// (PROTOCOL.md \u00a73.7a). It carries a single chunk of streaming output
 // during a long-running command. Multiple chunks are sent for the same
 // request; the last chunk carries `more: false` and the final
 // status/exit_code/duration_ms fields.
@@ -312,6 +314,66 @@ type WritePayload struct {
 	Mode       string `json:"mode,omitempty"`
 }
 
+// ReadChunkPayload is the body of a `read_chunk` message
+// (PROTOCOL.md \u00a73.9a). Sent by the node instead of a single
+// read_result when the server advertises `read_chunk` in
+// hello_ack and the file exceeds the configured chunk size.
+//
+// Intermediate chunks carry only Seq/Data/More. The final chunk
+// (More=false) additionally carries Status, SizeBytes, and SHA256;
+// on Status="error" the Error/ErrorDetail fields explain why.
+type ReadChunkPayload struct {
+	Seq         int    `json:"seq"`
+	Data        string `json:"data"`
+	More        bool   `json:"more"`
+	TS          string `json:"ts,omitempty"`
+	Status      string `json:"status,omitempty"`
+	SizeBytes   int64  `json:"size_bytes,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	Error       string `json:"error,omitempty"`
+	ErrorDetail string `json:"error_detail,omitempty"`
+}
+
+// NewReadChunkEnvelope builds a `read_chunk` envelope that echoes the
+// call's request id.
+func NewReadChunkEnvelope(requestID string, payload ReadChunkPayload) Envelope {
+	return Envelope{
+		Type:    TypeReadChunk,
+		ID:      requestID,
+		Payload: payload,
+	}
+}
+
+// WriteChunkPayload is the body of a `write_chunk` message
+// (PROTOCOL.md \u00a73.11a). Sent by the server instead of a single
+// `write` when the node advertised `write_chunk` in its hello.
+//
+// The first chunk (Seq=1) carries Path, Mode, SizeBytes, and SHA256
+// so the node can open the target and prepare for verification.
+// Intermediate chunks carry only Seq/Data/More. The final chunk
+// (More=false) triggers the node to verify the accumulated SHA256 and
+// apply the write atomically.
+type WriteChunkPayload struct {
+	Seq       int    `json:"seq"`
+	Data      string `json:"data"`
+	More      bool   `json:"more"`
+	TS        string `json:"ts,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	SHA256    string `json:"sha256,omitempty"`
+}
+
+// NewWriteChunkEnvelope builds a `write_chunk` envelope that echoes
+// the call's request id.
+func NewWriteChunkEnvelope(requestID string, payload WriteChunkPayload) Envelope {
+	return Envelope{
+		Type:    TypeWriteChunk,
+		ID:      requestID,
+		Payload: payload,
+	}
+}
+
 // WriteResultPayload is the body of a `write_result` message
 // (PROTOCOL.md \u00a73.11). On status=ok, BytesWritten is the number of
 // bytes actually written to disk. On status=error, Error /
@@ -319,6 +381,7 @@ type WritePayload struct {
 type WriteResultPayload struct {
 	Status       string `json:"status"`
 	BytesWritten int64  `json:"bytes_written,omitempty"`
+	SHA256       string `json:"sha256,omitempty"`
 	Error        string `json:"error,omitempty"`
 	ErrorDetail  string `json:"error_detail,omitempty"`
 }
