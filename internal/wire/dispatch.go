@@ -204,33 +204,18 @@ func (d *Dispatcher) writeOne(ctx context.Context, env Envelope) error {
 	return d.client.WriteE2E(ctx, env)
 }
 
-// WriteEnvelope sends one envelope on the connection from outside
-// the dispatch loop. It exists for the Task 1.9 pinger, which runs
-// in a separate goroutine and needs to write `ping` frames
-// without going through the dispatcher.
+// WriteEnvelope sends one envelope on the connection. It is called
+// from the dispatch loop, from streaming handlers (which emit many
+// frames per call), and from the pinger's ticker goroutine.
 //
-// WriteEnvelope is goroutine-safe with itself and with the
-// dispatcher's Run loop only because gorilla/websocket's Conn
-// serialises writes internally. The dispatcher never writes
-// asynchronously (every write is inside the Run loop), so the
-// only concurrent writer is the pinger. That keeps the invariant
-// "at most one in-flight write at any time" intact.
-//
-// Callers that want to write from multiple goroutines must
-// serialize themselves; this method does not.
-//
-// TODO(async-writes): this single-in-flight invariant is
-// load-bearing for three layers (gorilla's write lock, the
-// dispatch loop's Run, and the pinger's onPing closure). The
-// moment a future task adds a second async writer — e.g. a
-// long-running handler that streams results back while the
-// dispatch loop is still servicing the next request, or an
-// unsolicited `event` push from a background goroutine (PROTOCOL.md
-// §10 lists events as a future direction) — gorilla's lock is no
-// longer enough and the onPing closure here can interleave with
-// a write that started after it. When that lands, the dispatch
-// loop needs an explicit write-serialisation mutex and every
-// caller of WriteEnvelope needs to be revisited.
+// Writes are serialised by Client.writeMu, not by gorilla/websocket.
+// gorilla does NOT serialise writes: a second concurrent WriteJSON
+// panics with "concurrent write to websocket connection", taking the
+// whole process down. The old comment here claimed otherwise and
+// asserted that only the pinger ever wrote outside the Run loop —
+// true until chunked transfers, which stream from inside a handler
+// while the pinger keeps ticking. A 50 MB read over a slow link
+// panicked the node exactly this way.
 func (d *Dispatcher) WriteEnvelope(ctx context.Context, env Envelope) error {
 	return d.writeOne(ctx, env)
 }

@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -152,6 +153,17 @@ type Client struct {
 
 	// writeTimeout bounds a single write; defaults to 10s.
 	writeTimeout time.Duration
+
+	// writeMu serialises writes to conn. gorilla/websocket permits
+	// only one concurrent writer: a second WriteJSON while another
+	// is in flight panics with "concurrent write to websocket
+	// connection". Until chunked transfers landed, the only writer
+	// outside the dispatch loop was the pinger, and the two never
+	// overlapped in practice. streamRead/streamExec now write many
+	// frames from inside a handler while the pinger's ticker
+	// goroutine keeps firing, so overlap is routine on any
+	// transfer long enough to cross a ping interval.
+	writeMu sync.Mutex
 }
 
 // Conn returns the underlying *websocket.Conn. Reserved for the
@@ -455,9 +467,12 @@ func (c *Client) legacyAuth(ctx context.Context, opts DialOptions) error {
 }
 
 // writeJSON sends one envelope with a per-message write deadline.
-// gorilla/websocket serialises writes internally so two concurrent
-// writes would corrupt the stream; the handshake is single-threaded
-// so we don't take a lock here. Task 1.6's dispatch loop will.
+// Handshake-only: hello and auth are exchanged on a single
+// goroutine before any handler or pinger exists, so this needs no
+// lock. Every write after the handshake goes through writeE2E,
+// which holds writeMu — see the note there. (The previous comment
+// claimed gorilla serialises writes internally; it does not. It
+// panics instead.)
 func (c *Client) writeJSON(ctx context.Context, timeout time.Duration, env Envelope) error {
 	if err := c.conn.SetWriteDeadline(deadlineFromCtx(ctx, timeout)); err != nil {
 		return fmt.Errorf("wire: set write deadline: %w", err)
@@ -539,6 +554,13 @@ func (c *Client) writeE2E(ctx context.Context, env Envelope) error {
 			},
 		}
 	}
+	// Every post-handshake write funnels through here, so this one
+	// lock covers the dispatch loop, streamed chunk frames, and the
+	// pinger's ticker goroutine alike. The deadline is set under the
+	// lock too: setting it before a blocked Lock would leave it
+	// already expired by the time the write actually starts.
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	if err := c.conn.SetWriteDeadline(deadlineFromCtx(ctx, c.writeTimeout)); err != nil {
 		return fmt.Errorf("wire: set write deadline: %w", err)
 	}
