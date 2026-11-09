@@ -968,6 +968,7 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 			execHandler.SetServerCapabilities(c.ServerCapabilities())
 			fsys := wire.NewFileSystem(cfg.Node.AllowedPaths, auditLog)
 			fsys.WriteFunc = d.WriteEnvelope
+			fsys.Touch = p.MarkAlive
 			fsys.ChunkSize = cfg.Node.ChunkSizeValue()
 			fsys.FsChunkMaxBytes = cfg.Node.FsChunkMaxBytesValue()
 			fsys.SetServerCapabilities(c.ServerCapabilities())
