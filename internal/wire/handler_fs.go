@@ -150,6 +150,12 @@ type FileSystem struct {
 	// dispatcher's WriteEnvelope, mirroring ExecHandler.
 	WriteFunc func(ctx context.Context, env Envelope) error
 
+	// Touch bumps the heartbeat liveness clock. A chunked read can
+	// stream for minutes without reading anything inbound, and the
+	// watchdog closes the connection after 90s of silence; call this
+	// after each chunk so a long transfer doesn't kill itself.
+	Touch func()
+
 	// ChunkSize is the byte size of each read_chunk / write_chunk
 	// payload. Reuses the exec chunk_size config knob.
 	ChunkSize int
@@ -184,6 +190,7 @@ type writeAssembly struct {
 	tmpPath   string
 	total     int64
 	seq       int
+	started   time.Time
 }
 
 // NewFileSystem returns a FileSystem wired with realOS.
@@ -282,7 +289,7 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 				ErrorDetail: fmt.Sprintf("%q is %d bytes; chunked cap is %d", canonical, info.Size(), fsys.FsChunkMaxBytes),
 			}), nil
 		}
-		return fsys.streamRead(ctx, requestID, canonical, info.Size())
+		return fsys.streamRead(ctx, requestID, canonical)
 	}
 
 	if info.Size() > MaxFileBytes {
@@ -318,7 +325,7 @@ func (fsys *FileSystem) ReadHandler(ctx context.Context, requestID string, paylo
 // server's assembly can be torn down cleanly. We return NoResponse so
 // the dispatcher skips the normal (single) response write — we already
 // sent our own result frames via WriteFunc.
-func (fsys *FileSystem) streamRead(ctx context.Context, requestID, path string, size int64) (Envelope, error) {
+func (fsys *FileSystem) streamRead(ctx context.Context, requestID, path string) (Envelope, error) {
 	f, err := fsys.IO.Open(path)
 	if err != nil {
 		fsys.audit("read", path, "error", 0)
@@ -338,6 +345,7 @@ func (fsys *FileSystem) streamRead(ctx context.Context, requestID, path string, 
 	var errDetail string
 	// sendChunk writes one read_chunk. more=false marks the last
 	// data-bearing frame; a zero-byte file produces no data frames.
+	sent := int64(0)
 	sendChunk := func(data []byte, more bool) error {
 		seq++
 		_, _ = hash.Write(data)
@@ -346,7 +354,17 @@ func (fsys *FileSystem) streamRead(ctx context.Context, requestID, path string, 
 			Data: base64.StdEncoding.EncodeToString(data),
 			More: more,
 		}
-		return fsys.WriteFunc(ctx, NewReadChunkEnvelope(requestID, payload))
+		if err := fsys.WriteFunc(ctx, NewReadChunkEnvelope(requestID, payload)); err != nil {
+			return err
+		}
+		sent += int64(len(data))
+		// A long stream reads nothing inbound while it runs, so the
+		// heartbeat watchdog would close the connection mid-file.
+		// Sending a chunk is itself proof the link is alive.
+		if fsys.Touch != nil {
+			fsys.Touch()
+		}
+		return nil
 	}
 	for {
 		n, rerr := f.Read(buf)
@@ -377,18 +395,23 @@ func (fsys *FileSystem) streamRead(ctx context.Context, requestID, path string, 
 		Seq:       seq + 1,
 		More:      false,
 		Status:    status,
-		SizeBytes: size,
+		SizeBytes: sent,
 		SHA256:    hex.EncodeToString(hash.Sum(nil)),
 	}
 	if status == "error" {
 		final.Error = "io_error"
 		final.ErrorDetail = errDetail
 	}
-	_ = fsys.WriteFunc(context.Background(), NewReadChunkEnvelope(requestID, final))
+	if err := fsys.WriteFunc(context.Background(), NewReadChunkEnvelope(requestID, final)); err != nil {
+		// The final frame is how the server learns the stream ended.
+		// Dropping the error strands its waiter until timeout, so
+		// surface it and let the connection recycle instead.
+		return Envelope{}, fmt.Errorf("wire: send final read_chunk: %w", err)
+	}
 	if status == "ok" {
-		fsys.audit("read", path, "ok", size)
+		fsys.audit("read", path, "ok", sent)
 	} else {
-		fsys.audit("read", path, "error", size)
+		fsys.audit("read", path, "error", sent)
 	}
 	return Envelope{NoResponse: true}, nil
 }
@@ -405,6 +428,11 @@ func (fsys *FileSystem) SetServerCapabilities(caps []string) {
 		}
 	}
 }
+
+// staleWriteAssembly is how long an in-flight chunked write may sit
+// without progress before a new seq=1 prunes it. Generous enough for a
+// 512 MiB transfer on a slow uplink.
+const staleWriteAssembly = 10 * time.Minute
 
 // WriteChunkHandler is the wire.Handler entry point for `write_chunk`
 // calls (PROTOCOL.md §3.11a). The dispatcher registers it for
@@ -471,6 +499,38 @@ func (fsys *FileSystem) WriteChunkHandler(ctx context.Context, requestID string,
 				ErrorDetail: fmt.Sprintf("%q is %d bytes; chunked cap is %d", canonical, p.SizeBytes, fsys.FsChunkMaxBytes),
 			}), nil
 		}
+		// Reject unknown modes instead of silently overwriting: the
+		// legacy write path errors on a bad mode, and a typo must not
+		// destroy the target.
+		if p.Mode != "" && p.Mode != "overwrite" && p.Mode != "create" && p.Mode != "append" {
+			fsys.audit("write", canonical, "rejected", 0)
+			return NewWriteResultEnvelope(requestID, WriteResultPayload{
+				Status:      "error",
+				Error:       "bad_request",
+				ErrorDetail: fmt.Sprintf("unknown mode %q (want create, overwrite, or append)", p.Mode),
+			}), nil
+		}
+		// Fail create-mode early so a doomed transfer isn't streamed in
+		// full. The apply-time check stays authoritative: the target
+		// can still appear mid-stream.
+		if writeModeFor(p.Mode) == WriteCreate {
+			if _, statErr := fsys.IO.Stat(canonical); statErr == nil {
+				fsys.audit("write", canonical, "error", 0)
+				return NewWriteResultEnvelope(requestID, WriteResultPayload{
+					Status:      "error",
+					Error:       "file_exists",
+					ErrorDetail: fmt.Sprintf("%q already exists", canonical),
+				}), nil
+			}
+		}
+		// Drop assemblies whose sender vanished (server crash or
+		// reconnect). The map is per-connection but the temp files are
+		// not, and a stalled transfer would hold an fd forever.
+		for id, old := range fsys.writes {
+			if fsys.now().Sub(old.started) > staleWriteAssembly {
+				fsys.abortWrite(id, old)
+			}
+		}
 		// The temp file lives in the target's directory so the
 		// final apply can be an atomic same-filesystem rename.
 		// (The legacy single-shot write uses the open flags from
@@ -492,6 +552,7 @@ func (fsys *FileSystem) WriteChunkHandler(ctx context.Context, requestID string,
 			hasher:    sha256.New(),
 			tmp:       tmp,
 			tmpPath:   tmp.Name(),
+			started:   fsys.now(),
 		}
 		fsys.writes[requestID] = asm
 	} else {
@@ -530,6 +591,20 @@ func (fsys *FileSystem) WriteChunkHandler(ctx context.Context, requestID string,
 		}
 		_, _ = asm.hasher.Write(data)
 		asm.total += int64(len(data))
+		// Enforce the declared size as bytes arrive. size_bytes is
+		// sender-controlled, so trusting it only at the final frame
+		// lets a sender fill the node's disk. This also bounds the
+		// transfer cap, which seq=1 already checked against the
+		// declared size.
+		if asm.total > asm.sizeBytes {
+			fsys.abortWrite(requestID, asm)
+			fsys.audit("write", asm.path, "error", 0)
+			return NewWriteResultEnvelope(requestID, WriteResultPayload{
+				Status:      "error",
+				Error:       "size_mismatch",
+				ErrorDetail: fmt.Sprintf("received %d bytes, declared %d", asm.total, asm.sizeBytes),
+			}), nil
+		}
 	}
 
 	if p.More {
@@ -622,6 +697,9 @@ func (fsys *FileSystem) applyChunkedWrite(asm *writeAssembly) (string, int64) {
 				return "file_exists", 0
 			}
 		}
+		// CreateTemp makes 0600; carry the target's mode (0644 for a
+		// new file) so a chunked write doesn't silently tighten it.
+		_ = os.Chmod(asm.tmpPath, fsys.permForTarget(asm.path))
 		if err := os.Rename(asm.tmpPath, asm.path); err != nil {
 			_ = os.Remove(asm.tmpPath)
 			return "io_error", 0
