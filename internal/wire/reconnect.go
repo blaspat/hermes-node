@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"runtime/debug"
 	"time"
 
 	"github.com/blaspat/hermes-node/internal/audit"
@@ -100,7 +101,18 @@ func (s *Supervisor) Run(ctx context.Context) error {
 
 var errFatal = errors.New("wire: fatal supervisor error (not retried)")
 
-func (s *Supervisor) runOnce(ctx context.Context) error {
+func (s *Supervisor) runOnce(ctx context.Context) (err error) {
+	// A panic anywhere on this goroutine (setup, the dispatch read
+	// loop, a stream handler writing outside dispatchCall's recover)
+	// must cost one reconnect, not the whole process. Converted to an
+	// error so Run's backoff loop treats it like any other failure.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("wire: panic on attempt %d: %v\n%s",
+				s.attempt, r, debug.Stack())
+		}
+	}()
+
 	c, err := s.opts.Dialer(ctx)
 	if err != nil {
 		if ctx.Err() != nil {

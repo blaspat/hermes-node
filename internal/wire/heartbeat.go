@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -60,12 +62,40 @@ func (p *Pinger) SetOnDead(cb func()) {
 	p.mu.Unlock()
 }
 
+// Start launches the ticker and watchdog goroutines. Each is
+// wrapped by guard: a panic on either goroutine must not abort the
+// process (recover is per-goroutine, and dispatch's recovery only
+// covers handler calls on the dispatch goroutine).
 func (p *Pinger) Start(ctx context.Context, onPing func(env Envelope)) {
 	p.onPing = onPing
 	p.MarkAlive()
 
-	go p.runTicker(ctx)
-	go p.runWatchdog(ctx)
+	go p.guard("ticker", func() { p.runTicker(ctx) })
+	go p.guard("watchdog", func() { p.runWatchdog(ctx) })
+}
+
+// guard runs one long-lived heartbeat goroutine, converting a panic
+// into a dead connection instead of a process abort. gorilla/websocket
+// panics rather than returning an error (e.g. "concurrent write to
+// websocket connection"), so an unguarded panic here takes the whole
+// node down rather than costing one reconnect. Marking dead and
+// closing the conn unwinds the dispatch loop, which runOnce turns
+// into a normal reconnect.
+func (p *Pinger) guard(name string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("wire: panic in heartbeat %s goroutine: %v\n%s",
+				name, r, debug.Stack())
+			p.mu.Lock()
+			cb := p.onDead
+			p.dead = true
+			p.mu.Unlock()
+			if cb != nil {
+				cb()
+			}
+		}
+	}()
+	fn()
 }
 
 // runTicker fires onPing at PingInterval until ctx is cancelled or
