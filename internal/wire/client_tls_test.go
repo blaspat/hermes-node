@@ -171,12 +171,13 @@ func TestConnect_AcceptsPinnedCert(t *testing.T) {
 	}
 
 	client, err := Connect(ctx5s(t), DialOptions{
-		ServerURL:        wssURL(srv),
-		NodeName:         "test-node",
-		Token:            "test-token",
-		NodeVersion:      "0.1.0-test",
-		HandshakeTimeout: testHandshakeTimeout,
-		TLSConfig:        tlsCfg,
+		ServerURL:              wssURL(srv),
+		NodeName:               "test-node",
+		Token:                  "test-token",
+		NodeVersion:            "0.1.0-test",
+		HandshakeTimeout:       testHandshakeTimeout,
+		AllowInsecureHandshake: true,
+		TLSConfig:              tlsCfg,
 	})
 	if err != nil {
 		t.Fatalf("Connect with valid pin: %v", err)
@@ -199,12 +200,13 @@ func TestConnect_RejectsPinnedCertMismatch(t *testing.T) {
 	}
 
 	_, err := Connect(ctx5s(t), DialOptions{
-		ServerURL:        wssURL(srv),
-		NodeName:         "test-node",
-		Token:            "test-token",
-		NodeVersion:      "0.1.0-test",
-		HandshakeTimeout: testHandshakeTimeout,
-		TLSConfig:        tlsCfg,
+		ServerURL:              wssURL(srv),
+		NodeName:               "test-node",
+		Token:                  "test-token",
+		NodeVersion:            "0.1.0-test",
+		HandshakeTimeout:       testHandshakeTimeout,
+		AllowInsecureHandshake: true,
+		TLSConfig:              tlsCfg,
 	})
 	if err == nil {
 		t.Fatal("expected Connect to fail when pin does not match")
@@ -228,12 +230,13 @@ func TestConnect_RejectsUntrustedCA(t *testing.T) {
 	}
 
 	_, err := Connect(ctx5s(t), DialOptions{
-		ServerURL:        wssURL(srv),
-		NodeName:         "test-node",
-		Token:            "test-token",
-		NodeVersion:      "0.1.0-test",
-		HandshakeTimeout: testHandshakeTimeout,
-		TLSConfig:        tlsCfg,
+		ServerURL:              wssURL(srv),
+		NodeName:               "test-node",
+		Token:                  "test-token",
+		NodeVersion:            "0.1.0-test",
+		HandshakeTimeout:       testHandshakeTimeout,
+		AllowInsecureHandshake: true,
+		TLSConfig:              tlsCfg,
 	})
 	if err == nil {
 		t.Fatal("expected Connect to fail when RootCAs does not trust server cert")
@@ -263,12 +266,13 @@ func TestConnect_AcceptsCustomCA(t *testing.T) {
 	}
 
 	client, err := Connect(ctx5s(t), DialOptions{
-		ServerURL:        wssURL(srv),
-		NodeName:         "test-node",
-		Token:            "test-token",
-		NodeVersion:      "0.1.0-test",
-		HandshakeTimeout: testHandshakeTimeout,
-		TLSConfig:        tlsCfg,
+		ServerURL:              wssURL(srv),
+		NodeName:               "test-node",
+		Token:                  "test-token",
+		NodeVersion:            "0.1.0-test",
+		HandshakeTimeout:       testHandshakeTimeout,
+		AllowInsecureHandshake: true,
+		TLSConfig:              tlsCfg,
 	})
 	if err != nil {
 		t.Fatalf("Connect with matching custom CA: %v", err)

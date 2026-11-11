@@ -436,6 +436,8 @@ func TestRun_ConnectsToServer(t *testing.T) {
 			Token:        "test-token",
 			AllowedPaths: []string{dir},
 			LogPath:      logPath,
+			// fakeServer speaks the pre-E2E handshake only.
+			AllowInsecureHandshake: true,
 		},
 	}
 	if err := config.Save(cfgPath, cfg); err != nil {
@@ -518,6 +520,8 @@ func TestRunRun_RefusesWhenDaemonAlreadyRunning(t *testing.T) {
 			Token:        "test-token",
 			AllowedPaths: []string{dir},
 			LogPath:      logPath,
+			// fakeServer speaks the pre-E2E handshake only.
+			AllowInsecureHandshake: true,
 		},
 	}
 	if err := config.Save(cfgPath, cfg); err != nil {
@@ -578,6 +582,8 @@ func TestRun_RefusesWhenDaemonAlreadyRunning(t *testing.T) {
 			Token:        "test-token",
 			AllowedPaths: []string{dir},
 			LogPath:      logPath,
+			// fakeServer speaks the pre-E2E handshake only.
+			AllowInsecureHandshake: true,
 		},
 	}
 	if err := config.Save(cfgPath, cfg); err != nil {
@@ -627,6 +633,8 @@ func TestRunRun_AcquiresLockWhenNoneHeld(t *testing.T) {
 			Token:        "test-token",
 			AllowedPaths: []string{dir},
 			LogPath:      logPath,
+			// fakeServer speaks the pre-E2E handshake only.
+			AllowInsecureHandshake: true,
 		},
 	}
 	if err := config.Save(cfgPath, cfg); err != nil {
@@ -722,6 +730,8 @@ func TestRunRun_ReclaimsStaleLock(t *testing.T) {
 			Token:        "test-token",
 			AllowedPaths: []string{dir},
 			LogPath:      logPath,
+			// fakeServer speaks the pre-E2E handshake only.
+			AllowInsecureHandshake: true,
 		},
 	}
 	if err := config.Save(cfgPath, cfg); err != nil {

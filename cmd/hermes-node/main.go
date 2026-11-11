@@ -882,6 +882,8 @@ func runRun(ctx context.Context, configPath string, stdout, stderr io.Writer) in
 				TLSConfig:    tlsCfg,
 				ProxyURL:     cfg.Node.ProxyURL,
 				DebugLog:     log.Debug,
+
+				AllowInsecureHandshake: cfg.Node.AllowInsecureHandshake,
 			})
 		},
 		// Setup is invoked once per (re)connect. We build a fresh
