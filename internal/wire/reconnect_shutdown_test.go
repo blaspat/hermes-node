@@ -61,7 +61,8 @@ func TestSupervisor_ExitsPromptlyOnCancel(t *testing.T) {
 			return Connect(ctx, DialOptions{
 				ServerURL: url, NodeName: "cancel-probe", Token: "t",
 				NodeVersion: "test", Platform: "linux", Arch: "amd64",
-				HandshakeTimeout: 5 * time.Second,
+				HandshakeTimeout:       5 * time.Second,
+				AllowInsecureHandshake: true,
 			})
 		},
 		Setup: func(_ context.Context, _ *Client, d *Dispatcher, p *Pinger) error {

@@ -272,14 +272,15 @@ func TestReconnect_RecoversAfterServerRestart(t *testing.T) {
 	dialer := &recordingDialer{
 		urlFn: currentURL.get,
 		opts: DialOptions{
-			ServerURL:        "ws://placeholder",
-			NodeName:         "test-node",
-			Token:            "test-token",
-			NodeVersion:      "0.1.0-test",
-			Platform:         "linux",
-			Arch:             "amd64",
-			Capabilities:     []string{"exec", "read", "write"},
-			HandshakeTimeout: 2 * time.Second,
+			ServerURL:              "ws://placeholder",
+			NodeName:               "test-node",
+			Token:                  "test-token",
+			NodeVersion:            "0.1.0-test",
+			Platform:               "linux",
+			Arch:                   "amd64",
+			Capabilities:           []string{"exec", "read", "write"},
+			HandshakeTimeout:       2 * time.Second,
+			AllowInsecureHandshake: true,
 		},
 	}
 	currentURL.set(srv.URL())
@@ -384,14 +385,15 @@ func TestReconnect_BackoffSchedule(t *testing.T) {
 	dialer := &recordingDialer{
 		urlFn: currentURL.get,
 		opts: DialOptions{
-			ServerURL:        "ws://placeholder",
-			NodeName:         "test-node",
-			Token:            "test-token",
-			NodeVersion:      "0.1.0-test",
-			Platform:         "linux",
-			Arch:             "amd64",
-			Capabilities:     []string{"exec", "read", "write"},
-			HandshakeTimeout: 2 * time.Second,
+			ServerURL:              "ws://placeholder",
+			NodeName:               "test-node",
+			Token:                  "test-token",
+			NodeVersion:            "0.1.0-test",
+			Platform:               "linux",
+			Arch:                   "amd64",
+			Capabilities:           []string{"exec", "read", "write"},
+			HandshakeTimeout:       2 * time.Second,
+			AllowInsecureHandshake: true,
 		},
 	}
 	currentURL.set(srv.URL())
@@ -463,14 +465,15 @@ func TestReconnect_AuditOnEveryReconnect(t *testing.T) {
 	dialer := &recordingDialer{
 		urlFn: currentURL.get,
 		opts: DialOptions{
-			ServerURL:        "ws://placeholder",
-			NodeName:         "test-node",
-			Token:            "test-token",
-			NodeVersion:      "0.1.0-test",
-			Platform:         "linux",
-			Arch:             "amd64",
-			Capabilities:     []string{"exec", "read", "write"},
-			HandshakeTimeout: 2 * time.Second,
+			ServerURL:              "ws://placeholder",
+			NodeName:               "test-node",
+			Token:                  "test-token",
+			NodeVersion:            "0.1.0-test",
+			Platform:               "linux",
+			Arch:                   "amd64",
+			Capabilities:           []string{"exec", "read", "write"},
+			HandshakeTimeout:       2 * time.Second,
+			AllowInsecureHandshake: true,
 		},
 	}
 	currentURL.set(srv.URL())
@@ -603,14 +606,15 @@ func TestReconnect_DispatchPanicDoesNotStopCycle(t *testing.T) {
 	dialer := &recordingDialer{
 		urlFn: func() string { return "ws://127.0.0.1:1" }, // always-dead
 		opts: DialOptions{
-			ServerURL:        "ws://127.0.0.1:1",
-			NodeName:         "test-node",
-			Token:            "test-token",
-			NodeVersion:      "0.1.0-test",
-			Platform:         "linux",
-			Arch:             "amd64",
-			Capabilities:     []string{"exec", "read", "write"},
-			HandshakeTimeout: 100 * time.Millisecond,
+			ServerURL:              "ws://127.0.0.1:1",
+			NodeName:               "test-node",
+			Token:                  "test-token",
+			NodeVersion:            "0.1.0-test",
+			Platform:               "linux",
+			Arch:                   "amd64",
+			Capabilities:           []string{"exec", "read", "write"},
+			HandshakeTimeout:       100 * time.Millisecond,
+			AllowInsecureHandshake: true,
 		},
 	}
 

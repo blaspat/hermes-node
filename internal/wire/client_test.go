@@ -163,14 +163,15 @@ func TestConnect_HappyPath(t *testing.T) {
 	defer cancel()
 
 	client, err := Connect(ctx, DialOptions{
-		ServerURL:        wsURL(srv),
-		NodeName:         "test-node",
-		Token:            "test-token",
-		NodeVersion:      "0.1.0-test",
-		Platform:         "linux",
-		Arch:             "amd64",
-		Capabilities:     []string{"exec", "read", "write"},
-		HandshakeTimeout: testHandshakeTimeout,
+		ServerURL:              wsURL(srv),
+		NodeName:               "test-node",
+		Token:                  "test-token",
+		NodeVersion:            "0.1.0-test",
+		Platform:               "linux",
+		Arch:                   "amd64",
+		Capabilities:           []string{"exec", "read", "write"},
+		HandshakeTimeout:       testHandshakeTimeout,
+		AllowInsecureHandshake: true,
 	})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -201,14 +202,15 @@ func TestConnect_AuthRejected(t *testing.T) {
 	defer cancel()
 
 	client, err := Connect(ctx, DialOptions{
-		ServerURL:        wsURL(srv),
-		NodeName:         "test-node",
-		Token:            "WRONG",
-		NodeVersion:      "0.1.0-test",
-		Platform:         "linux",
-		Arch:             "amd64",
-		Capabilities:     []string{"exec", "read", "write"},
-		HandshakeTimeout: testHandshakeTimeout,
+		ServerURL:              wsURL(srv),
+		NodeName:               "test-node",
+		Token:                  "WRONG",
+		NodeVersion:            "0.1.0-test",
+		Platform:               "linux",
+		Arch:                   "amd64",
+		Capabilities:           []string{"exec", "read", "write"},
+		HandshakeTimeout:       testHandshakeTimeout,
+		AllowInsecureHandshake: true,
 	})
 	if err == nil {
 		_ = client.Conn().Close()
@@ -237,14 +239,15 @@ func TestConnect_ProtocolMismatch(t *testing.T) {
 	defer cancel()
 
 	client, err := Connect(ctx, DialOptions{
-		ServerURL:        wsURL(srv),
-		NodeName:         "test-node",
-		Token:            "test-token",
-		NodeVersion:      "0.1.0-test",
-		Platform:         "linux",
-		Arch:             "amd64",
-		Capabilities:     []string{"exec", "read", "write"},
-		HandshakeTimeout: testHandshakeTimeout,
+		ServerURL:              wsURL(srv),
+		NodeName:               "test-node",
+		Token:                  "test-token",
+		NodeVersion:            "0.1.0-test",
+		Platform:               "linux",
+		Arch:                   "amd64",
+		Capabilities:           []string{"exec", "read", "write"},
+		HandshakeTimeout:       testHandshakeTimeout,
+		AllowInsecureHandshake: true,
 	})
 	if err == nil {
 		_ = client.Conn().Close()

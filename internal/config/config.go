@@ -57,6 +57,12 @@ type NodeConfig struct {
 	// 0 means unlimited. The legacy single-shot read/write path
 	// keeps its own 10 MB cap (MaxFileBytes).
 	FsChunkMaxMB *int `toml:"fs_chunk_max_mb"`
+	// AllowInsecureHandshake re-enables the plaintext token auth
+	// fallback for servers that predate the E2E handshake. A server
+	// that offers no ecdh_pub is indistinguishable from an on-path
+	// attacker stripping it, so this sends the pairing token in the
+	// clear. Leave it off unless you are talking to an old server.
+	AllowInsecureHandshake bool `toml:"allow_insecure_handshake"`
 }
 
 // SandboxExecEnabled reports whether the exec shell should run under the

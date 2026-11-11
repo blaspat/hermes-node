@@ -39,6 +39,12 @@ var ErrAuthFailed = errors.New("wire: authentication failed")
 // hello_err (version mismatch or other protocol-level rejection).
 var ErrProtocolMismatch = errors.New("wire: protocol version rejected by server")
 
+// ErrInsecureHandshake is returned by Connect when the server completes
+// hello_ack without an ECDH pubkey. Falling back to token auth would put
+// the pairing token on the wire in plaintext, which is exactly what an
+// on-path attacker forces by stripping the key. The client refuses.
+var ErrInsecureHandshake = errors.New("wire: server does not support encrypted handshake")
+
 // ErrHandshakeTimeout is returned by Connect when the server doesn't
 // respond within the configured handshake timeout.
 var ErrHandshakeTimeout = errors.New("wire: handshake timed out")
@@ -82,6 +88,12 @@ type DialOptions struct {
 	// HandshakeTimeout bounds the wait for hello_ack and auth_ok.
 	// Zero means DefaultHandshakeTimeout.
 	HandshakeTimeout time.Duration
+
+	// AllowInsecureHandshake permits a plaintext token auth fallback
+	// when the server's hello_ack carries no ecdh_pub. Anyone on the
+	// path can strip that key, so a fallback hands them the pairing
+	// token; leave this false outside tests.
+	AllowInsecureHandshake bool
 
 	// TLSConfig, when non-nil, is attached to a copy of
 	// websocket.DefaultDialer. The copy is used only for this one
@@ -338,10 +350,16 @@ func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
 		c.sessionID = ack.SessionID
 		c.serverCaps = ack.Capabilities
 
-		// If the server returned ECDH pub, do E2E handshake.
+		// A server that offers no ECDH pubkey is either pre-E2E or an
+		// on-path attacker stripping it to force plaintext token auth.
+		// The client cannot tell the two apart, so it refuses by
+		// default: falling back to legacyAuth sends the pairing token
+		// in the clear. Tests can opt in via AllowInsecureHandshake.
 		if ack.ECDHPub == "" {
-			debugLog("wire handshake using legacy auth: node=%s", opts.NodeName)
-			// Legacy server — fall through to plaintext auth.
+			if !opts.AllowInsecureHandshake {
+				return fmt.Errorf("%w: server offered no ecdh_pub; refusing to send the pairing token in plaintext", ErrInsecureHandshake)
+			}
+			debugLog("wire handshake using legacy auth (AllowInsecureHandshake): node=%s", opts.NodeName)
 			return c.legacyAuth(ctx, opts)
 		}
 

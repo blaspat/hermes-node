@@ -255,6 +255,12 @@ log_level = "debug"
 # When set, overrides HTTPS_PROXY / HTTP_PROXY env vars.
 proxy_url = "http://proxy.corp.example:8080"
 
+# Allow the plaintext token auth fallback for servers that predate the
+# E2E handshake. Off by default: a server that offers no ecdh_pub is
+# indistinguishable from an attacker stripping it, and the fallback
+# sends the pairing token in the clear.
+# allow_insecure_handshake = false
+
 # Reconnect backoff: fine-tune the exponential backoff for
 # transient network drops. The defaults work for most setups.
 backoff_initial = "1s"      # default; Go duration, e.g. "500ms", "5s"
@@ -353,11 +359,13 @@ Client                                    Server
 
 ### Backward compatibility
 
-The client sends `e2e: true` in the `hello` message. If the server doesn't support E2E, it omits `ecdh_pub` from `hello_ack` — the client falls back to legacy plaintext auth automatically.
+The client sends `e2e: true` in the `hello` message. If the server doesn't support E2E, it omits `ecdh_pub` from `hello_ack`. The client treats that as fatal and refuses to connect — a server that offers no key is indistinguishable from an on-path attacker stripping it, and the fallback would put the pairing token on the wire in plaintext.
+
+If you must connect to a server that predates the E2E handshake, set `allow_insecure_handshake = true` in `[node]`. Off by default; leave it off.
 
 ## Security
 
-- **Token** is stored in plaintext in `config.toml` (mode 0600). It is never transmitted on the wire after initial pairing — the E2E handshake uses HMAC proofs instead. Revoke it on the server with `hermes node revoke --name <name>` — revocation is immediate.
+- **Token** is stored in plaintext in `config.toml` (mode 0600). It is never transmitted on the wire: the E2E handshake proves possession with an HMAC instead, and the client refuses to connect to a server that doesn't offer E2E. Revoke it on the server with `hermes node revoke --name <name>` — revocation is immediate.
 - **Path allowlist** is enforced on the laptop. Each path is symlink-resolved before the check, so symlinks escaping the allowlist are rejected.
 - **Exec is sandboxed (macOS)** — the `exec` shell runs under `sandbox-exec`. Reads and writes under `$HOME` and `/Volumes` are denied unless the path is in `allowed_paths` (plus build-cache and toolchain-dotfile defaults); writes outside are denied everywhere. Denials surface as `Operation not permitted`. Disable with `sandbox_exec = false`. Other platforms run the shell unsandboxed.
 - **TLS 1.3** required for all connections. Custom CA and cert pinning are supported.
