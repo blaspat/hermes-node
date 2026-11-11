@@ -121,6 +121,19 @@ func (s *Supervisor) runOnce(ctx context.Context) (err error) {
 		return fmt.Errorf("wire: dial attempt %d: %w", s.attempt, err)
 	}
 
+	// Close the connection when the supervisor's context is cancelled.
+	// Without this, cancelling ctx does not interrupt the dispatch
+	// loop: d.Run is parked in conn.ReadMessage() with a read deadline
+	// of readTimeout (90s by default), and a blocked socket read does
+	// not observe context cancellation. The supervisor therefore takes
+	// up to 90s to exit, and `hermes-node stop` SIGKILLs it at 5s —
+	// so every shutdown is a kill, never a clean close. Closing the
+	// conn unblocks the read immediately; runOnce then sees
+	// ctx.Err() != nil and returns errFatal, which Run turns into a
+	// clean exit.
+	stopClose := context.AfterFunc(ctx, func() { _ = c.Conn().Close() })
+	defer stopClose()
+
 	closed := false
 	defer func() {
 		if !closed {
